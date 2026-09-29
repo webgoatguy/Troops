@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Red vs Blue</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='10' cy='16' r='8' fill='%23d64037'/%3E%3Ccircle cx='22' cy='16' r='8' fill='%232b67d6'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#f4f1ea; --panel:#fffdf8; --ink:#23201b; --muted:#6e675c; --line:#ddd5c5;
+  --red:#d64037; --red-dark:#9e2821; --red-soft:#f6d6d2;
+  --blue:#2b67d6; --blue-dark:#1a4595; --blue-soft:#d6e2f8;
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1500px;margin:0 auto;padding:16px 20px 32px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px 20px;flex-wrap:wrap;margin-bottom:12px}
+.brand{display:flex;align-items:center;gap:12px}
+h1{margin:0;font-size:22px;letter-spacing:.01em}
+h1 .r{color:var(--red)} h1 .b{color:var(--blue)}
+.scorebar{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap}
+.score{border-radius:10px;padding:6px 14px;min-width:150px;display:flex;flex-direction:column;align-items:center}
+.score .num{font-size:22px;font-weight:700;line-height:1.1}
+.score .sub{font-size:12px;opacity:.85}
+.score.red{background:var(--red-soft);color:var(--red-dark)}
+.score.blue{background:var(--blue-soft);color:var(--blue-dark)}
+.turn{align-self:center;padding:8px 16px;border-radius:999px;font-weight:700;color:#fff;white-space:nowrap}
+.turn.R{background:var(--red)} .turn.B{background:var(--blue)}
+.turn.mine{box-shadow:0 0 0 3px #fff,0 0 0 6px #e8a800}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.sep{width:1px;height:24px;background:var(--line);margin:0 4px}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 12px;border-radius:8px;cursor:pointer}
+button:hover:not(:disabled){border-color:#b9b09d}
+button:disabled{opacity:.45;cursor:default}
+button.primary{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:600}
+button.primary:hover:not(:disabled){background:#000}
+button.small{padding:3px 9px;font-size:12px}
+button.add-blue{border-color:var(--blue);color:var(--blue-dark);font-weight:600}
+button.add-red{border-color:var(--red);color:var(--red-dark);font-weight:600}
+button.add-blue.active{background:var(--blue);color:#fff}
+button.add-red.active{background:var(--red);color:#fff}
+.status{height:4.4em;overflow:hidden;margin:0 0 10px;color:var(--muted)}
+.status>span{display:block;min-height:1.45em}
+.status b{color:var(--ink)}
+.preview{font-weight:600;color:var(--ink)}
+.preview.bad{color:var(--muted);font-weight:400}
+.board-wrap{overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
+canvas{display:block;margin:0 auto;cursor:pointer;touch-action:manipulation}
+.below{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin-top:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 8px}
+.panel ul{margin:0;padding-left:18px}
+.panel li{margin:3px 0}
+.legend{display:grid;grid-template-columns:26px 1fr;gap:6px 8px;align-items:center}
+.opt{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.opt .lbl{font-weight:600}
+.opt.row{flex-direction:row;align-items:center;gap:8px}
+.hint{font-size:12px;color:var(--muted)}
+select{font:inherit;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:#fff}
+ul.log{max-height:260px;overflow:auto;padding-left:0;list-style:none}
+ul.log li{padding:4px 0;border-bottom:1px dashed var(--line);margin:0}
+ul.log li.note{color:var(--muted);font-style:italic}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle;background:#b9b09d}
+kbd{font:12px ui-monospace,Menlo,monospace;background:#eee8dc;border-radius:4px;padding:1px 5px}
+.size{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+.size input{width:58px;font:inherit;padding:6px 6px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+.codebox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
+.codebox-head,.codebox-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.codebox-foot{justify-content:flex-start}
+.codebox textarea{width:100%;font:12px/1.4 ui-monospace,Menlo,monospace;padding:8px;border:1px solid var(--line);border-radius:8px;resize:vertical;background:#fff;color:var(--ink)}
+
+/* online room bar */
+.roombar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin-bottom:10px}
+.roombar .code{font:700 16px ui-monospace,Menlo,monospace;letter-spacing:.12em;background:#eee8dc;border-radius:6px;padding:2px 8px}
+.seat{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px}
+.seat.B{background:var(--blue-soft);color:var(--blue-dark)}
+.seat.R{background:var(--red-soft);color:var(--red-dark)}
+.seat .open{font-style:italic;opacity:.8}
+.net{margin-left:auto;font-size:12px;color:var(--muted)}
+.net.bad{color:var(--red-dark);font-weight:600}
+
+/* lobby */
+.lobby{max-width:980px;margin:24px auto 0}
+.lobby .intro{color:var(--muted);margin:4px 0 18px}
+.namefield{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.namefield input,.joinrow input{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+.namefield input{width:220px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.card h3{margin:0;font-size:16px}
+.card p{margin:0;color:var(--muted)}
+.pick{display:flex;gap:6px;flex-wrap:wrap}
+.pick button.on{outline:2px solid var(--ink)}
+.joinrow{display:flex;gap:8px}
+.joinrow input{width:130px;text-transform:uppercase;letter-spacing:.12em;font-family:ui-monospace,Menlo,monospace}
+.lobby .err{color:var(--red-dark);font-weight:600;min-height:1.4em;margin-top:12px}
+.card.featured{border-color:#b9b09d;box-shadow:0 1px 0 #0000000d}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1><span class="r">Red</span> vs <span class="b">Blue</span></h1>
+      <button id="menuBtn" class="small" hidden>← Menu</button>
+    </div>
+    <div class="scorebar" id="scorebar" hidden>
+      <div class="score red"><span class="num" id="scoreR">0</span><span class="sub"><span id="nameR">Red</span> points · <span id="countR">0</span> <span id="wordR">stones</span> on board</span></div>
+      <div class="turn B" id="turn">Blue to move</div>
+      <div class="score blue"><span class="num" id="scoreB">0</span><span class="sub"><span id="nameB">Blue</span> points · <span id="countB">0</span> <span id="wordB">stones</span> on board</span></div>
+    </div>
+  </header>
+
+  <!-- ============ LOBBY ============ -->
+  <section class="lobby" id="lobby" hidden>
+    <p class="intro">Move your stones like chess kings, or slide a whole blob. Blue scores off the top wall, Red off the bottom.</p>
+    <label class="namefield"><b>Your name</b> <input id="nameInput" maxlength="24" placeholder="e.g. Sam"></label>
+
+    <div class="card featured" id="joinCard" hidden>
+      <h3>Join room <span class="code" id="joinCardCode"></span></h3>
+      <p id="joinCardInfo">You've been invited to a game.</p>
+      <div><button class="primary" id="joinCardBtn">Join game</button></div>
+    </div>
+
+    <div class="cards" id="lobbyCards">
+      <div class="card">
+        <h3>Play online with a friend</h3>
+        <p>Create a room, then send your friend the invite link.</p>
+        <div class="pick" id="colorPick">
+          <button data-c="B" class="add-blue on">I'll play Blue</button>
+          <button data-c="R" class="add-red">I'll play Red</button>
+        </div>
+        <div><button class="primary" id="createBtn">Create game</button></div>
+      </div>
+      <div class="card">
+        <h3>Join a game</h3>
+        <p>Got a room code from a friend?</p>
+        <div class="joinrow"><input id="joinCode" maxlength="5" placeholder="ABCDE" autocomplete="off"><button class="primary" id="joinBtn">Join</button></div>
+      </div>
+      <div class="card">
+        <h3>Play on this device</h3>
+        <p>Pass-and-play, or practise against yourself. Nothing is sent online.</p>
+        <div><button id="localBtn">Start local game</button></div>
+      </div>
+    </div>
+    <div class="err" id="lobbyErr"></div>
+  </section>
+
+  <!-- ============ GAME ============ -->
+  <main id="gameView" hidden>
+    <div class="roombar" id="roombar" hidden>
+      <span>Room <span class="code" id="roomCode"></span></span>
+      <button class="small" id="inviteBtn">Copy invite link</button>
+      <span class="seat B" id="seatB"></span>
+      <span class="seat R" id="seatR"></span>
+      <span class="net" id="net"></span>
+    </div>
+
+    <div class="toolbar">
+      <button class="add-blue" id="addB">Add blue stone to board</button>
+      <button class="add-red" id="addR">Add red stone to board</button>
+      <span class="sep"></span>
+      <button id="undo">Undo</button>
+      <button id="switchTurn">Switch turn</button>
+      <button id="resetScores">Reset scores</button>
+      <button id="clear">Clear board</button>
+      <span class="sep"></span>
+      <label class="size">Board <input type="number" id="bw" min="3" max="120" value="48"> × <input type="number" id="bh" min="3" max="80" value="24"></label>
+      <button id="applySize">Resize</button>
+      <span class="sep"></span>
+      <button id="copyPos">Copy position to clipboard</button>
+      <button id="pastePos">Paste position from clipboard</button>
+      <button id="save">Save in browser</button>
+      <button id="load">Load from browser</button>
+    </div>
+
+    <div class="codebox" id="codebox" hidden>
+      <div class="codebox-head"><b id="codeTitle">Paste a position code</b><button id="codeClose">Close</button></div>
+      <textarea id="codeText" rows="3" spellcheck="false" placeholder="Paste a position code here (Ctrl+V / ⌘V)"></textarea>
+      <div class="codebox-foot"><button id="codeLoad">Load this position</button><span class="hint" id="codeHint"></span></div>
+    </div>
+
+    <div class="status"><span id="status"></span><span id="preview" class="preview"></span></div>
+
+    <div class="board-wrap"><canvas id="board"></canvas></div>
+
+    <div class="below">
+      <section class="panel">
+        <h2>How to move</h2>
+        <ul>
+          <li>Click a stone: its king moves appear.</li>
+          <li>Click the same stone again: its whole blob is selected, and that stone gets a ring. A blob can slide to any spot where its new position overlaps or edge-touches its old one.</li>
+          <li>In blob mode, the shaded squares show everywhere the ringed stone can go. Hover to preview the whole blob, then click to move it. You can also drag any stone of the blob to where you want that stone to end up.</li>
+          <li>Or nudge the preview with <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> and press <kbd>Enter</kbd>.</li>
+          <li>Click the ringed stone again (or <kbd>Esc</kbd>) to deselect.</li>
+          <li><kbd>Shift</kbd>+click one of your own adjacent stones to deliberately move into it (you lose the moving stone).</li>
+          <li><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Z</kbd> undoes.</li>
+          <li>Placing: press an "Add … stone" button, then click or drag across squares. Clicking a stone of that color removes it. Press the button again or <kbd>Esc</kbd> when done.</li>
+        </ul>
+      </section>
+      <section class="panel">
+        <h2>Move markers</h2>
+        <div class="legend">
+          <svg width="22" height="22"><rect x="2" y="2" width="18" height="18" fill="#2b67d6" fill-opacity=".18"/></svg><span>Blob mode: where the ringed stone can go</span>
+          <svg width="22" height="22"><circle cx="11" cy="11" r="4" fill="#8a8272"/></svg><span>Empty square — stone lands there</span>
+          <svg width="22" height="22"><circle cx="11" cy="11" r="8" fill="none" stroke="#1f9d55" stroke-width="3"/></svg><span>Attack wins — enemy stone dies, yours takes its place</span>
+          <svg width="22" height="22"><path d="M6 6L16 16M16 6L6 16" stroke="#2a2622" stroke-width="3" stroke-linecap="round"/></svg><span>Your stone is lost (loses the attack, side wall, own stone, or wrong wall)</span>
+          <svg width="22" height="22"><text x="11" y="15" text-anchor="middle" font-size="12" font-weight="700" fill="#1a4595">+1</text></svg><span>Scores a point</span>
+          <svg width="22" height="22"><rect x="2" y="2" width="18" height="18" fill="#e8a800" fill-opacity=".35"/></svg><span>The last move</span>
+        </div>
+        <p class="hint" style="margin:10px 0 0">Blue scores off the top edge, Red off the bottom edge. Stones pushed off the left/right edges (or off the opponent's scoring edge) just disappear.</p>
+      </section>
+      <section class="panel">
+        <h2>Options</h2>
+        <p class="hint" id="optsShared" hidden style="margin:0 0 10px">Options are shared by everyone in the room.</p>
+        <label class="opt row"><input type="checkbox" id="enforce" checked> <span class="lbl">Enforce turns</span></label>
+        <div class="opt">
+          <span class="lbl">Move order</span>
+          <select id="order">
+            <option value="122">Blue 1, then 2 each (1 2 2 2 …)</option>
+            <option value="111">Alternate, 1 each (Blue starts)</option>
+          </select>
+          <span class="hint">"Switch turn" hands the turn over early. "Clear board" restarts the order with Blue.</span>
+        </div>
+        <div class="opt">
+          <span class="lbl">When a single stone attacks, its size counts as…</span>
+          <select id="singleSize">
+            <option value="one">1 (it moved alone)</option>
+            <option value="blob">The size of the blob it came from</option>
+          </select>
+          <span class="hint">Blob moves always attack with the full blob size. Defenders always use the size of the blob they belong to.</span>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Move log</h2>
+        <ul class="log" id="log"></ul>
+      </section>
+    </div>
+  </main>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

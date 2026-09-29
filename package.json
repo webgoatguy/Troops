@@ -1,0 +1,14 @@
+{
+  "name": "red-vs-blue",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Red vs Blue — a two-player stone game you can play with friends online.",
+  "scripts": {
+    "local": "node dev-server.js"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.34.3",
+    "redis": "^4.7.0"
+  }
+}
