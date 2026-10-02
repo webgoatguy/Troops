@@ -336,8 +336,12 @@ function playClick(x, y, shift) {
         showTurn = false; changed(); return;
       }
       const t = G.kingTargets(game, info, sel.x, sel.y).find(t => t.tx === x && t.ty === y);
-      if (t && (G.isPoints(game) ? t.o === 'empty' : (t.o !== 'self' || shift))) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
-      if (t && G.isPoints(game) && !(onBoard(x, y) && b[y][x])) { message = t.o === 'forbidden' ? G.FORBIDDEN_KING : G.BLOCKED_KING; showTurn = false; changed(); return; }
+      const noDeath = G.isPoints(game) || G.isHybrid(game);
+      if (t && (noDeath ? t.o === 'empty' || t.o === 'score' : (t.o !== 'self' || shift))) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
+      if (t && noDeath && !(onBoard(x, y) && b[y][x])) {
+        message = t.o === 'forbidden' ? G.FORBIDDEN_KING : G.isHybrid(game) ? G.BLOCKED_KING_H : G.BLOCKED_KING;
+        showTurn = false; changed(); return;
+      }
     } else {
       if (x === sel.x && y === sel.y) { sel = null; message = ''; changed(); return; }
       const bl = blobAt(sel.x, sel.y), dx = x - sel.x, dy = y - sel.y;
@@ -748,7 +752,7 @@ function render() {
     for (const m of moves) if (inView(m.tx, m.ty)) { if (pm) pointsMarker(m, false); else if (m.o !== 'empty') marker(m.tx, m.ty, m.o, m.c); }
     const parts = [...(plan.dragged ? [`dragging ${plan.dragged} stuck stone${plan.dragged > 1 ? 's' : ''}`] : []), ...G.summarize(moves, bl.color)];
     setPreview(`Move ${G.offsetText(off.dx, off.dy)}${parts.length ? ' — ' + parts.join(', ') : ''}.${kbd ? ' Press Enter to confirm.' : ''}`);
-  } else if (plan.reason === G.BLOCKED_BLOB) {
+  } else if (plan.reason === G.BLOCKED_BLOB || plan.reason === G.BLOCKED_BLOB_H) {
     for (const m of moves) if (m.o === 'blocked' && inView(m.tx, m.ty)) cross(PX(m.tx), PX(m.ty), cs * 0.2, COL.x, .7);
     setPreview('Blocked — something would run into a wall or another stone.', true);
   } else if (plan.reason === G.GIFT_BLOB) {
@@ -774,6 +778,7 @@ function updateUI() {
   $('carryB').textContent = game.carry.filter(([x, y]) => b[y] && b[y][x] === 'B').length;
   document.body.dataset.mode = game.opts.mode;
   $('gmode').value = game.opts.mode;
+  $('modeTag').textContent = game.opts.mode === 'hybrid' ? 'Hybrid mode' : 'Points mode';
   const seats = online && online.room ? online.room.seats : null;
   $('nameR').textContent = seats && seats.R ? seats.R.name : 'Red';
   $('nameB').textContent = seats && seats.B ? seats.B.name : 'Blue';

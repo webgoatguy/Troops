@@ -8,6 +8,9 @@
 //               in the top row, Red's in the bottom row. A stone that lands on one of its own
 //               points picks it up (carries it); the point scores when that stone reaches home
 //               (Blue: bottom 5 rows, Red: top 5 rows). Moving a blob drags everything stuck to it.
+//   'hybrid'  — Classic scoring (Blue off the top wall, Red off the bottom wall; stones that
+//               cross score, the rest of a blob stays), but stones never die: nothing may move
+//               into another stone, a side wall or its own back wall. Blobs move on their own.
 
 export const MIN_W = 3, MAX_W = 120, MIN_H = 3, MAX_H = 80;
 export const HOME_ROWS = 5;
@@ -21,8 +24,10 @@ const key = (x, y) => x + ',' + y;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export const CANT = 'The blob can\'t go there — its new position has to overlap or edge-touch where it is now.';
 export const BLOCKED_KING = 'In Points mode stones can\'t move into walls or other stones.';
+export const BLOCKED_BLOB_H = 'That would push the blob into another stone, a side wall or its own back wall.';
 export const BLOCKED_BLOB = 'That would push the blob (or something stuck to it) into a wall or another stone.';
 export const GIFT_BLOB = 'Illegal — that would put a stone onto one of its opponent\'s points.';
+export const BLOCKED_KING_H = 'In Hybrid mode stones can\'t move into other stones, the side walls or their own back wall.';
 export const FORBIDDEN_KING = 'Illegal — a stone can\'t move onto its opponent\'s points.';
 
 export function emptyBoard(W, H) { return Array.from({ length: H }, () => Array(W).fill(null)); }
@@ -49,6 +54,8 @@ export function normalize(g) {
 
 export const onBoard = (g, x, y) => x >= 0 && x < g.W && y >= 0 && y < g.H;
 export const isPoints = g => g.opts.mode === 'points';
+export const isHybrid = g => g.opts.mode === 'hybrid';
+export const MODES = ['classic', 'points', 'hybrid'];
 export const carrySet = g => new Set(g.carry.map(([x, y]) => key(x, y)));
 export const inHome = (g, c, y) => (c === 'B' ? y >= g.H - HOME_ROWS : y < HOME_ROWS);
 export const pointRow = (g, c) => (c === 'B' ? 0 : g.H - 1);
@@ -146,6 +153,18 @@ function pointsOutcome(g, tx, ty, vacated) {
   const t = g.board[ty][tx];
   return !t || (vacated && vacated.has(key(tx, ty))) ? 'empty' : 'blocked';
 }
+/* ---------- hybrid mode: landing ----------
+   'score' when leaving through your far wall (straight through it, not a corner),
+   'empty' for a free square, otherwise 'blocked'. */
+function hybridOutcome(g, color, tx, ty, vacated) {
+  if (!onBoard(g, tx, ty)) {
+    const through = tx >= 0 && tx < g.W;
+    return through && ((color === 'B' && ty < 0) || (color === 'R' && ty >= g.H)) ? 'score' : 'blocked';
+  }
+  const t = g.board[ty][tx];
+  return !t || (vacated && vacated.has(key(tx, ty))) ? 'empty' : 'blocked';
+}
+
 // Adds pick / deliver / carry flags to each landing move (m.c = the stone's colour).
 function annotatePoints(g, moves) {
   const cs = carrySet(g);
@@ -165,7 +184,7 @@ export function kingTargets(g, info, x, y) {
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
     if (!dx && !dy) continue;
     const tx = x + dx, ty = y + dy;
-    let o = pm ? pointsOutcome(g, tx, ty) : outcome(g, info, c, tx, ty, atk);
+    let o = pm ? pointsOutcome(g, tx, ty) : isHybrid(g) ? hybridOutcome(g, c, tx, ty) : outcome(g, info, c, tx, ty, atk);
     if (pm && o === 'empty' && !pointAllowed(g, c, tx, ty)) o = 'forbidden';
     out.push({ fx: x, fy: y, tx, ty, dx, dy, c, o });
   }
@@ -210,6 +229,11 @@ export function blobMoves(g, info, bl, dx, dy) {
 export function blobPlan(g, info, bl, dx, dy) {
   const T = blobTranslations(g, info, bl);
   const shapeOk = isValidT(T, dx, dy);
+  if (isHybrid(g)) {
+    const moves = bl.cells.map(([x, y]) => ({ fx: x, fy: y, tx: x + dx, ty: y + dy, c: bl.color, o: hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) }));
+    const blocked = moves.some(m => m.o === 'blocked');
+    return { valid: shapeOk && !blocked, reason: !shapeOk ? CANT : blocked ? BLOCKED_BLOB_H : '', moves, dragged: 0 };
+  }
   if (!isPoints(g)) {
     return { valid: shapeOk, reason: shapeOk ? '' : CANT, moves: blobMoves(g, info, bl, dx, dy), dragged: 0 };
   }
@@ -231,6 +255,10 @@ export function blobPlan(g, info, bl, dx, dy) {
 // Every legal offset for blob `bl` in the current mode (used to shade reachable squares).
 export function legalOffsets(g, info, bl) {
   const T = blobTranslations(g, info, bl);
+  if (isHybrid(g)) {
+    if (!T.legalHybrid) T.legalHybrid = T.list.filter(([dx, dy]) => bl.cells.every(([x, y]) => hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) !== 'blocked'));
+    return T.legalHybrid;
+  }
   if (!isPoints(g)) return T.list;
   if (T.legalPoints) return T.legalPoints;
   const cells = clusterOf(info, bl).cells;
@@ -305,6 +333,7 @@ export function encodePosition(g) {
   const pm = isPoints(g), cs = pm ? carrySet(g) : null;
   const rows = g.board.map((row, y) => rle(row.map((c, x) => (!c ? '.' : pm && cs.has(key(x, y)) ? c : c.toLowerCase())), true));
   const head = `${g.W}x${g.H};${g.turn}${g.left}/${g.per};R${g.scores.R}B${g.scores.B};${rows.join('/')}`;
+  if (isHybrid(g)) return `RVB2;h;${head};;`;
   if (!pm) return 'RVB1;' + head;
   const pts = c => rle([...g.pts[c]].map(v => (v === '1' ? 'o' : 'x')), false);
   return `RVB2;p;${head};${pts('B')};${pts('R')}`;
@@ -313,9 +342,9 @@ export function decodePosition(text) {
   const t = String(text || '').replace(/\s+/g, '');
   let m = t.match(/^RVB1;(\d+)x(\d+);([RB])(\d+)\/(\d+);R(\d+)B(\d+);(.*)$/i), mode = null, ptsB = null, ptsR = null;
   if (!m) {
-    const m2 = t.match(/^RVB2;([pc]);(\d+x\d+;[RB]\d+\/\d+;R\d+B\d+;[^;]*);([ox\d]*);([ox\d]*)$/);
+    const m2 = t.match(/^RVB2;([pch]);(\d+x\d+;[RB]\d+\/\d+;R\d+B\d+;[^;]*);([ox\d]*);([ox\d]*)$/);
     if (!m2) return null;
-    mode = m2[1] === 'p' ? 'points' : 'classic';
+    mode = { p: 'points', c: 'classic', h: 'hybrid' }[m2[1]];
     ptsB = m2[3]; ptsR = m2[4];
     m = ('RVB1;' + m2[2]).match(/^RVB1;(\d+)x(\d+);([RB])(\d+)\/(\d+);R(\d+)B(\d+);(.*)$/);
     if (!m) return null;
@@ -392,6 +421,19 @@ function executeClassic(g, info, color, moves, atk, label) {
   return finishMove(g, color, results, label, to);
 }
 
+// Hybrid: moves are already checked (every stone lands on a free square or scores).
+function executeHybrid(g, moves, mover, label) {
+  const nb = g.board.map(r => r.slice());
+  for (const m of moves) nb[m.fy][m.fx] = null;
+  const to = [];
+  for (const m of moves) {
+    if (m.o === 'score') g.scores[m.c]++;
+    else { nb[m.ty][m.tx] = m.c; to.push([m.tx, m.ty]); }
+  }
+  g.board = nb;
+  return finishMove(g, mover, moves, label, to);
+}
+
 // Points: moves are already checked (all land on free squares) and annotated.
 function executePoints(g, moves, mover, label) {
   const nb = g.board.map(r => r.slice());
@@ -445,6 +487,12 @@ export function applyAction(g, a, actor = {}) {
       if (!(dx || dy) || Math.abs(dx) > 1 || Math.abs(dy) > 1) return fail('A single stone moves one square in any direction.');
       const label = `moved stone at (${fx + 1}, ${fy + 1}) ${ARROW[dx + ',' + dy]}`;
       const info = computeBlobs(g);
+      if (isHybrid(g)) {
+        const m = kingTargets(g, info, fx, fy).find(t => t.tx === tx && t.ty === ty);
+        if (m.o === 'blocked') return fail(BLOCKED_KING_H);
+        pushHistory(g);
+        return done(executeHybrid(g, [m], color, label), true);
+      }
       if (pm) {
         const m = kingTargets(g, info, fx, fy).find(t => t.tx === tx && t.ty === ty);
         if (m.o !== 'empty') return fail(m.o === 'forbidden' ? FORBIDDEN_KING : BLOCKED_KING);
@@ -465,7 +513,9 @@ export function applyAction(g, a, actor = {}) {
       if (!plan.valid) return fail(plan.reason);
       pushHistory(g);
       const label = `moved ${bl.size}-stone blob ${offsetText(dx, dy)}` + (plan.dragged ? ` (dragging ${plural(plan.dragged, 'stuck stone')})` : '');
-      return done(pm ? executePoints(g, plan.moves, bl.color, label) : executeClassic(g, info, bl.color, plan.moves, bl.size, label), true);
+      return done(pm ? executePoints(g, plan.moves, bl.color, label)
+        : isHybrid(g) ? executeHybrid(g, plan.moves, bl.color, label)
+        : executeClassic(g, info, bl.color, plan.moves, bl.size, label), true);
     }
 
     case 'edit': {
@@ -554,7 +604,7 @@ export function applyAction(g, a, actor = {}) {
       setPosition(g, pos);
       if (pos.mode) g.opts.mode = pos.mode;
       g.lastMove = null;
-      const m = pos.mode === 'points' ? ', Points mode' : '';
+      const m = pos.mode === 'points' ? ', Points mode' : pos.mode === 'hybrid' ? ', Hybrid mode' : '';
       note(`loaded a position (${pos.W} × ${pos.H}${m})`, `Position loaded (${pos.W} × ${pos.H}${m})`);
       return done(`Position loaded (${pos.W} × ${pos.H} board${m}).`);
     }
@@ -572,10 +622,11 @@ export function applyAction(g, a, actor = {}) {
 
     case 'options': {
       const said = [];
-      if ((a.mode === 'classic' || a.mode === 'points') && a.mode !== g.opts.mode) {
+      if (MODES.includes(a.mode) && a.mode !== g.opts.mode) {
         g.opts.mode = a.mode;
         resetPoints(g);
-        said.push(a.mode === 'points' ? 'game mode Points (collect points and bring them home)' : 'game mode Classic');
+        said.push({ classic: 'game mode Classic', points: 'game mode Points (collect points and bring them home)',
+          hybrid: 'game mode Hybrid (classic scoring, but stones never die or collide)' }[a.mode]);
       }
       if (typeof a.enforce === 'boolean' && a.enforce !== g.opts.enforce) {
         g.opts.enforce = a.enforce; said.push(`turns ${a.enforce ? 'enforced' : 'not enforced'}`);

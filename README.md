@@ -64,7 +64,7 @@ poll less often, change the numbers in the last line of `poll()` in `public/app.
 
 ## Game modes
 
-Pick the mode under **Options → Game mode**. In an online room the mode is shared,
+Pick the mode under **Options → Game mode** (Classic, Points or Hybrid). In an online room the mode is shared,
 and switching it puts every point back.
 
 - **Classic**: stones fight. When stones collide, the attacker loses if its blob is
@@ -85,6 +85,15 @@ and switching it puts every point back.
     stone onto its *own* point is allowed, and it picks that point up.) Stones also
     can't be placed on the opponent's points, and if a resize, mode switch or loaded
     position would leave a stone on its opponent's point, that point is removed.
+
+- **Hybrid**:
+  - Scoring works like Classic: Blue scores by moving stones off the top wall and
+    Red off the bottom wall.
+  - When a blob crosses the far wall only part-way, the stones that cross score and
+    the rest stay on the board.
+  - Stones never die. Nothing may move into another stone (either color), a side
+    wall, or its own back wall, and a blob move is all or nothing.
+  - Moving a blob never drags other stones along.
 
 ## Game features
 
