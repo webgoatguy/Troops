@@ -337,7 +337,7 @@ function playClick(x, y, shift) {
       }
       const t = G.kingTargets(game, info, sel.x, sel.y).find(t => t.tx === x && t.ty === y);
       if (t && (G.isPoints(game) ? t.o === 'empty' : (t.o !== 'self' || shift))) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
-      if (t && G.isPoints(game) && !(onBoard(x, y) && b[y][x])) { message = G.BLOCKED_KING; showTurn = false; changed(); return; }
+      if (t && G.isPoints(game) && !(onBoard(x, y) && b[y][x])) { message = t.o === 'forbidden' ? G.FORBIDDEN_KING : G.BLOCKED_KING; showTurn = false; changed(); return; }
     } else {
       if (x === sel.x && y === sel.y) { sel = null; message = ''; changed(); return; }
       const bl = blobAt(sel.x, sel.y), dx = x - sel.x, dy = y - sel.y;
@@ -364,6 +364,7 @@ function paintCell(x, y) {
   if (!onBoard(x, y)) return;
   const cur = paintBoard[y][x];
   const v = painting.action === 'paint' ? mode : (cur === mode ? null : cur);
+  if (v && G.isPoints(game) && G.pointAt(game, x, y) === G.opp(v)) return;   // can't sit on an opponent's point
   if (cur !== v) { paintBoard[y][x] = v; paintChanges.set(x + ',' + y, [x, y, v]); }
 }
 function finishPaint() {
@@ -704,6 +705,7 @@ function render() {
     ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(PX(sel.x), PX(sel.y), cs * 0.47); ctx.stroke();
     for (const t of G.kingTargets(game, info, sel.x, sel.y)) {
       if (t.o === 'self' || t.o === 'blocked') { if (inView(t.tx, t.ty)) cross(PX(t.tx), PX(t.ty), cs * 0.14, COL.x, .25); continue; }
+      if (t.o === 'forbidden') { cross(PX(t.tx), PX(t.ty), cs * 0.18, COL.x, .7); continue; }
       if (hover && hover.x === t.tx && hover.y === t.ty) cellRect(t.tx, t.ty, `rgba(${RGB[c]},.22)`);
       if (pm) pointsMarker(t, true); else marker(t.tx, t.ty, t.o, c);
     }
@@ -751,7 +753,7 @@ function render() {
     setPreview('Blocked — something would run into a wall or another stone.', true);
   } else if (plan.reason === G.GIFT_BLOB) {
     for (const m of moves) if (m.gift) cross(PX(m.tx), PX(m.ty), cs * 0.22, COL.x, .8);
-    setPreview('Illegal — that would drag an opponent\'s stone onto one of their own points.', true);
+    setPreview('Illegal — a stone would land on one of its opponent\'s points.', true);
   } else {
     setPreview('Not reachable — the new position must overlap or edge-touch the old one.', true);
   }

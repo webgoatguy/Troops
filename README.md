@@ -78,9 +78,13 @@ and switching it puts every point back.
   - The point scores when that stone reaches home. Blue's home is the bottom 5 rows
     and Red's is the top 5 rows.
   - Moving a blob drags everything stuck to it (any chain of touching stones, of
-    either color). The blob's move is only legal if nothing in the group would hit a
-    wall or another stone, and if it wouldn't drag an opponent's stone onto one of
-    their own points (a square in their point row whose point is still there).
+    either color). The move is only legal if nothing in the group would hit a wall
+    or another stone.
+  - Any move that puts a blue stone on a red point or a red stone on a blue point is
+    illegal, whether the stone moves itself or is dragged. (Dragging an opponent's
+    stone onto its *own* point is allowed, and it picks that point up.) Stones also
+    can't be placed on the opponent's points, and if a resize, mode switch or loaded
+    position would leave a stone on its opponent's point, that point is removed.
 
 ## Game features
 

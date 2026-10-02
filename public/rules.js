@@ -22,7 +22,8 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export const CANT = 'The blob can\'t go there — its new position has to overlap or edge-touch where it is now.';
 export const BLOCKED_KING = 'In Points mode stones can\'t move into walls or other stones.';
 export const BLOCKED_BLOB = 'That would push the blob (or something stuck to it) into a wall or another stone.';
-export const GIFT_BLOB = 'Illegal — that would drag an opponent\'s stone onto one of their own points.';
+export const GIFT_BLOB = 'Illegal — that would put a stone onto one of its opponent\'s points.';
+export const FORBIDDEN_KING = 'Illegal — a stone can\'t move onto its opponent\'s points.';
 
 export function emptyBoard(W, H) { return Array.from({ length: H }, () => Array(W).fill(null)); }
 const fullPts = W => '1'.repeat(W);
@@ -42,6 +43,7 @@ export function normalize(g) {
   if (!g.opts.mode) g.opts.mode = 'classic';
   if (!g.pts || typeof g.pts.B !== 'string' || g.pts.B.length !== g.W || g.pts.R.length !== g.W) g.pts = { B: fullPts(g.W), R: fullPts(g.W) };
   if (!Array.isArray(g.carry)) g.carry = [];
+  if (isPoints(g)) sanitizePoints(g);
   return g;
 }
 
@@ -51,6 +53,21 @@ export const carrySet = g => new Set(g.carry.map(([x, y]) => key(x, y)));
 export const inHome = (g, c, y) => (c === 'B' ? y >= g.H - HOME_ROWS : y < HOME_ROWS);
 export const pointRow = (g, c) => (c === 'B' ? 0 : g.H - 1);
 export const hasPoint = (g, c, x, y) => y === pointRow(g, c) && x >= 0 && x < g.W && g.pts[c][x] === '1';
+// Colour of the uncollected point on (x, y), or null.
+export const pointAt = (g, x, y) => (hasPoint(g, 'B', x, y) ? 'B' : hasPoint(g, 'R', x, y) ? 'R' : null);
+// A stone of colour c may only land on a point square if it's c's own point and c is the one moving.
+// THE rule: a blue stone may never be on a red point, and a red stone never on a blue point.
+const pointAllowed = (g, c, x, y) => pointAt(g, x, y) !== opp(c);
+// Drop any point that has an opponent's stone sitting on it (e.g. after a resize, mode
+// switch or loaded position), so no stone is ever on its opponent's point.
+function sanitizePoints(g) {
+  const fix = (c, y) => {
+    const s = [...g.pts[c]];
+    for (let x = 0; x < g.W; x++) if (s[x] === '1' && g.board[y][x] === opp(c)) s[x] = '0';
+    return s.join('');
+  };
+  g.pts = { B: fix('B', 0), R: fix('R', g.H - 1) };
+}
 
 /* ---------- turn order ----------
    g.turn = whose turn, g.per = moves in this turn, g.left = moves still to make.
@@ -148,7 +165,9 @@ export function kingTargets(g, info, x, y) {
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
     if (!dx && !dy) continue;
     const tx = x + dx, ty = y + dy;
-    out.push({ fx: x, fy: y, tx, ty, dx, dy, c, o: pm ? pointsOutcome(g, tx, ty) : outcome(g, info, c, tx, ty, atk) });
+    let o = pm ? pointsOutcome(g, tx, ty) : outcome(g, info, c, tx, ty, atk);
+    if (pm && o === 'empty' && !pointAllowed(g, c, tx, ty)) o = 'forbidden';
+    out.push({ fx: x, fy: y, tx, ty, dx, dy, c, o });
   }
   return pm ? annotatePoints(g, out) : out;
 }
@@ -200,8 +219,8 @@ export function blobPlan(g, info, bl, dx, dy) {
     fx: x, fy: y, tx: x + dx, ty: y + dy, c: g.board[y][x], o: pointsOutcome(g, x + dx, y + dy, vac),
   })));
   const blocked = moves.some(m => m.o === 'blocked');
-  // Illegal: dragging an opponent's stone onto one of their own (still uncollected) points.
-  for (const m of moves) m.gift = m.o === 'empty' && m.c !== bl.color && hasPoint(g, m.c, m.tx, m.ty);
+  // Illegal: any stone (yours or one being dragged) landing on its opponent's point.
+  for (const m of moves) m.gift = m.o === 'empty' && !pointAllowed(g, m.c, m.tx, m.ty);
   const gift = moves.some(m => m.gift);
   return {
     valid: shapeOk && !blocked && !gift,
@@ -219,7 +238,7 @@ export function legalOffsets(g, info, bl) {
   const free = (x, y) => onBoard(g, x, y) && (!g.board[y][x] || vac.has(key(x, y)));
   const ok = (x, y, dx, dy) => {
     const c = g.board[y][x];
-    return free(x + dx, y + dy) && (c === bl.color || !hasPoint(g, c, x + dx, y + dy));
+    return free(x + dx, y + dy) && pointAllowed(g, c, x + dx, y + dy);
   };
   T.legalPoints = T.list.filter(([dx, dy]) => cells.every(([x, y]) => ok(x, y, dx, dy)));
   return T.legalPoints;
@@ -331,6 +350,7 @@ function setPosition(g, pos) {
   g.turn = pos.turn; g.per = pos.per; g.left = pos.left; g.scores = pos.scores;
   g.pts = pos.pts || { B: fullPts(pos.W), R: fullPts(pos.W) };
   g.carry = pos.carry || [];
+  sanitizePoints(g);
 }
 
 /* ---------- log & undo history ---------- */
@@ -404,7 +424,7 @@ function moveProblem(g, color, actor) {
   if (g.opts.enforce && color !== g.turn) return `It's ${NAME[g.turn]}'s turn.`;
   return null;
 }
-function resetPoints(g) { g.pts = { B: fullPts(g.W), R: fullPts(g.W) }; g.carry = []; }
+function resetPoints(g) { g.pts = { B: fullPts(g.W), R: fullPts(g.W) }; g.carry = []; sanitizePoints(g); }
 
 export function applyAction(g, a, actor = {}) {
   if (!a || typeof a !== 'object') return fail('Unknown action.');
@@ -427,7 +447,7 @@ export function applyAction(g, a, actor = {}) {
       const info = computeBlobs(g);
       if (pm) {
         const m = kingTargets(g, info, fx, fy).find(t => t.tx === tx && t.ty === ty);
-        if (m.o !== 'empty') return fail(BLOCKED_KING);
+        if (m.o !== 'empty') return fail(m.o === 'forbidden' ? FORBIDDEN_KING : BLOCKED_KING);
         pushHistory(g);
         return done(executePoints(g, [m], color, label), true);
       }
@@ -452,13 +472,16 @@ export function applyAction(g, a, actor = {}) {
       const ch = a.changes;
       if (!Array.isArray(ch) || ch.length > g.W * g.H) return fail('Bad edit.');
       const real = [];
+      let refused = 0;
       for (const e of ch) {
         if (!Array.isArray(e)) return fail('Bad edit.');
         const [x, y, c] = e;
         if (!isInt(x) || !isInt(y) || !onBoard(g, x, y) || !(c === 'R' || c === 'B' || c === null)) return fail('Bad edit.');
+        if (pm && c && !pointAllowed(g, c, x, y)) { refused++; continue; }
         if (g.board[y][x] !== c) real.push([x, y, c]);
       }
-      if (!real.length) return done('');
+      const why = refused ? `Skipped ${plural(refused, 'square')} — a stone can't be placed on its opponent's points.` : '';
+      if (!real.length) return done(why);
       pushHistory(g);
       let add = 0, rem = 0;
       const touched = new Set();
@@ -468,7 +491,7 @@ export function applyAction(g, a, actor = {}) {
       if (add) parts.push(`added ${plural(add, 'stone')}`);
       if (rem) parts.push(`removed ${plural(rem, 'stone')}`);
       if (who) note(`edited the board (${parts.join(', ')})`, '');
-      return done('');
+      return done(why);
     }
 
     case 'resize': {
@@ -489,6 +512,7 @@ export function applyAction(g, a, actor = {}) {
       g.pts = { B: shiftPts(g.pts.B), R: shiftPts(g.pts.R) };
       g.carry = g.carry.map(([x, y]) => [x + ox, y + oy]).filter(([x, y]) => x >= 0 && x < w && y >= 0 && y < h && nb[y][x]);
       g.W = w; g.H = h; g.board = nb; g.lastMove = null;
+      sanitizePoints(g);
       const drop = dropped ? ` — ${dropped === 1 ? '1 stone that no longer fit was' : dropped + ' stones that no longer fit were'} removed` : '';
       note(`resized the board to ${w} × ${h}${drop}`, `Board resized to ${w} × ${h}${drop}`);
       return done(`Board resized to ${w} × ${h}${drop}.${dropped ? ' (Undo brings them back.)' : ''}`);
