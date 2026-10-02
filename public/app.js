@@ -9,7 +9,8 @@ const RGB = { R: '214,64,55', B: '43,103,214' };
 const COL = {
   R: '#d64037', B: '#2b67d6', Rd: '#9e2821', Bd: '#1a4595',
   cellA: '#f8f4eb', cellB: '#f0eadd', grid: '#e2dac9', side: '#bdb5a5',
-  blueGoal: '#d6e2f8', redGoal: '#f6d6d2', sel: '#e8a800', win: '#1f9d55', x: '#2a2622'
+  blueGoal: '#d6e2f8', redGoal: '#f6d6d2', sel: '#e8a800', win: '#1f9d55', x: '#2a2622',
+  Rl: '#ef8a80', Bl: '#6a97ec', gold: '#f2c230', goldDark: '#8a6a00'
 };
 const ORD = ['', 'first', 'second', 'third'];
 
@@ -102,7 +103,7 @@ function stopOnline() {
 function applyRoom(room, version) {
   online.room = room;
   online.version = version;
-  game = room.game;
+  game = G.normalize(room.game);
   changed();
   renderRoomBar();
 }
@@ -118,7 +119,7 @@ function sendAction(action) {
     if (r.ok) {
       o.version = r.version;
       o.room = r.room;
-      if (o.pending === 1) { game = r.room.game; changed(); renderRoomBar(); }
+      if (o.pending === 1) { game = G.normalize(r.room.game); changed(); renderRoomBar(); }
     } else {
       o.epoch++;                                     // drop anything queued behind this
       message = esc(r.error || 'Something went wrong.'); showTurn = false; sel = null;
@@ -296,7 +297,7 @@ function startLocal() {
     g = JSON.parse(store.get('rvb-local-game'));
     if (!g || !G.decodePosition(G.encodePosition(g)) || !Array.isArray(g.log) || !Array.isArray(g.history) || !g.opts) g = null;
   } catch { g = null; }
-  game = g || G.newGame();
+  game = G.normalize(g || G.newGame());
   window.history.replaceState(null, '', '?local');
   mode = 'play'; sel = null; message = ''; showTurn = false;
   $('roombar').hidden = true;
@@ -329,18 +330,22 @@ function playClick(x, y, shift) {
       if (x === sel.x && y === sel.y) {
         sel.level = 2;
         const bl = blobAt(x, y);
-        message = `Blob selected (${bl.size} stone${bl.size > 1 ? 's' : ''}). Click where the ringed stone should go and the rest of the blob follows — or drag any of its stones.`;
+        const stuck = G.isPoints(game) ? G.clusterOf(info, bl).cells.length - bl.size : 0;
+        message = `Blob selected (${bl.size} stone${bl.size > 1 ? 's' : ''}). Click where the ringed stone should go and the rest of the blob follows — or drag any of its stones.`
+          + (stuck ? ` The ${stuck} stone${stuck > 1 ? 's' : ''} stuck to it (dashed) will be dragged along.` : '');
         showTurn = false; changed(); return;
       }
       const t = G.kingTargets(game, info, sel.x, sel.y).find(t => t.tx === x && t.ty === y);
-      if (t && (t.o !== 'self' || shift)) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
+      if (t && (G.isPoints(game) ? t.o === 'empty' : (t.o !== 'self' || shift))) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
+      if (t && G.isPoints(game) && !(onBoard(x, y) && b[y][x])) { message = G.BLOCKED_KING; showTurn = false; changed(); return; }
     } else {
       if (x === sel.x && y === sel.y) { sel = null; message = ''; changed(); return; }
       const bl = blobAt(sel.x, sel.y), dx = x - sel.x, dy = y - sel.y;
       const ownOther = onBoard(x, y) && b[y][x] === bl.color && info.id[y][x] !== bl.index;
-      if (G.isValidT(G.blobTranslations(game, info, bl), dx, dy)) {
+      const plan = G.blobPlan(game, info, bl, dx, dy);
+      if (plan.valid) {
         if (!ownOther || shift) { doBlob(dx, dy); return; }
-      } else if (!ownOther) { message = G.CANT; showTurn = false; changed(); return; }
+      } else if (!ownOther) { message = plan.reason; showTurn = false; changed(); return; }
     }
   }
   if (onBoard(x, y) && b[y][x]) {
@@ -407,8 +412,9 @@ window.addEventListener('pointerup', e => {
   const c = cellAt(e), bl = selBlob();
   const dx = c.x - d.gx, dy = c.y - d.gy;
   if (!bl || (!dx && !dy)) { render(); return; }
-  if (G.isValidT(G.blobTranslations(game, info, bl), dx, dy)) doBlob(dx, dy);
-  else { message = G.CANT; showTurn = false; changed(); }
+  const plan = G.blobPlan(game, info, bl, dx, dy);
+  if (plan.valid) doBlob(dx, dy);
+  else { message = plan.reason; showTurn = false; changed(); }
 });
 canvas.addEventListener('pointerleave', () => { if (!painting && !drag) { hover = null; render(); } });
 
@@ -428,8 +434,9 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Enter' && kbd) {
     e.preventDefault();
-    if (G.isValidT(G.blobTranslations(game, info, bl), kbd.dx, kbd.dy)) doBlob(kbd.dx, kbd.dy);
-    else { message = G.CANT; showTurn = false; changed(); }
+    const plan = G.blobPlan(game, info, bl, kbd.dx, kbd.dy);
+    if (plan.valid) doBlob(kbd.dx, kbd.dy);
+    else { message = plan.reason; showTurn = false; changed(); }
   }
 });
 
@@ -451,6 +458,7 @@ $('applySize').onclick = applySize;
 for (const id of ['bw', 'bh']) $(id).addEventListener('keydown', e => { if (e.key === 'Enter') applySize(); });
 $('enforce').onchange = e => { sel = null; dispatch({ type: 'options', enforce: e.target.checked }); };
 $('order').onchange = e => dispatch({ type: 'options', order: e.target.value });
+$('gmode').onchange = e => { sel = null; dispatch({ type: 'options', mode: e.target.value }); };
 $('singleSize').onchange = e => dispatch({ type: 'options', singleSize: e.target.value });
 
 async function copyText(text) {
@@ -555,13 +563,32 @@ function marker(x, y, o, color) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('+1', px, py + 1); break;
   }
 }
-function drawStone(x, y, c, alpha = 1) {
+function drawStone(x, y, c, alpha = 1, carrying = false) {
   const px = PX(x), py = PX(y);
   ctx.save(); ctx.globalAlpha = alpha;
-  circle(px, py, cs * 0.38); ctx.fillStyle = COL[c]; ctx.fill();
+  circle(px, py, cs * 0.38); ctx.fillStyle = carrying ? COL[c + 'l'] : COL[c]; ctx.fill();
   ctx.lineWidth = Math.max(1, cs * 0.06); ctx.strokeStyle = COL[c + 'd']; ctx.stroke();
-  circle(px - cs * 0.11, py - cs * 0.11, cs * 0.12); ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill();
+  if (carrying) {
+    circle(px, py, cs * 0.15); ctx.fillStyle = COL.gold; ctx.fill();
+    ctx.lineWidth = Math.max(1, cs * 0.04); ctx.strokeStyle = COL.goldDark; ctx.stroke();
+  } else {
+    circle(px - cs * 0.11, py - cs * 0.11, cs * 0.12); ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill();
+  }
   ctx.restore();
+}
+function diamond(x, y, r, fill, stroke) {
+  const px = PX(x), py = PX(y);
+  ctx.beginPath(); ctx.moveTo(px, py - r); ctx.lineTo(px + r, py); ctx.lineTo(px, py + r); ctx.lineTo(px - r, py); ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = Math.max(2, cs * 0.1); ctx.stroke(); }
+}
+// Points-mode marker for a landing square: +1 delivers, hollow diamond picks up, dot = plain move.
+function pointsMarker(m, plainDot) {
+  if (m.deliver) {
+    ctx.fillStyle = COL[m.c + 'd']; ctx.font = `800 ${Math.round(cs * 0.5)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('+1', PX(m.tx), PX(m.ty) + 1);
+  } else if (m.pick) diamond(m.tx, m.ty, cs * 0.3, null, COL[m.c + 'd']);
+  else if (plainDot) { ctx.fillStyle = `rgba(${RGB[m.c]},.75)`; circle(PX(m.tx), PX(m.ty), cs * 0.15); ctx.fill(); }
 }
 function setPreview(text, bad) {
   const el = $('preview');
@@ -576,17 +603,27 @@ function render() {
   ctx.clearRect(0, 0, cw, ch);
 
   // walls
+  const pm = G.isPoints(game);
   ctx.fillStyle = COL.side; ctx.fillRect(0, 0, cw, ch);
-  ctx.fillStyle = COL.blueGoal; ctx.fillRect(cs, 0, W * cs, cs);
-  ctx.fillStyle = COL.redGoal; ctx.fillRect(cs, (H + 1) * cs, W * cs, cs);
   ctx.font = `700 ${Math.max(9, Math.round(cs * 0.45))}px system-ui, sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const wide = ctx.measureText('▼ RED SCORES ▼').width + 40 <= W * cs;
-  const nLab = wide ? Math.max(1, Math.min(3, Math.floor(W * cs / 300))) : 1;
-  for (let i = 0; i < nLab; i++) {
-    const f = (i + 0.5) / nLab;
-    ctx.fillStyle = COL.Bd; ctx.fillText(wide ? '▲ BLUE SCORES ▲' : '▲', cs + W * cs * f, cs / 2 + 1);
-    ctx.fillStyle = COL.Rd; ctx.fillText(wide ? '▼ RED SCORES ▼' : '▼', cs + W * cs * f, (H + 1.5) * cs + 1);
+  if (!pm) {
+    ctx.fillStyle = COL.blueGoal; ctx.fillRect(cs, 0, W * cs, cs);
+    ctx.fillStyle = COL.redGoal; ctx.fillRect(cs, (H + 1) * cs, W * cs, cs);
+    const wide = ctx.measureText('▼ RED SCORES ▼').width + 40 <= W * cs;
+    const nLab = wide ? Math.max(1, Math.min(3, Math.floor(W * cs / 300))) : 1;
+    for (let i = 0; i < nLab; i++) {
+      const f = (i + 0.5) / nLab;
+      ctx.fillStyle = COL.Bd; ctx.fillText(wide ? '▲ BLUE SCORES ▲' : '▲', cs + W * cs * f, cs / 2 + 1);
+      ctx.fillStyle = COL.Rd; ctx.fillText(wide ? '▼ RED SCORES ▼' : '▼', cs + W * cs * f, (H + 1.5) * cs + 1);
+    }
+  } else {
+    const top = 'BLUE POINTS  ·  RED HOME', bot = 'BLUE HOME  ·  RED POINTS';
+    if (ctx.measureText(top).width + 20 <= W * cs) {
+      ctx.fillStyle = '#4a443b';
+      ctx.fillText(top, cs + W * cs / 2, cs / 2 + 1);
+      ctx.fillText(bot, cs + W * cs / 2, (H + 1.5) * cs + 1);
+    }
   }
 
   // board
@@ -601,6 +638,21 @@ function render() {
   ctx.stroke();
   ctx.strokeStyle = '#8f8672'; ctx.lineWidth = 1.5; ctx.strokeRect(cs, cs, W * cs, H * cs);
 
+  // points mode: home bases and the points still on the board
+  if (pm) {
+    const hr = Math.min(G.HOME_ROWS, H);
+    ctx.fillStyle = `rgba(${RGB.R},.10)`; ctx.fillRect(cs, cs, W * cs, hr * cs);
+    ctx.fillStyle = `rgba(${RGB.B},.10)`; ctx.fillRect(cs, (H - hr + 1) * cs, W * cs, hr * cs);
+    ctx.save(); ctx.setLineDash([5, 4]); ctx.lineWidth = 1.5;
+    ctx.strokeStyle = `rgba(${RGB.R},.55)`; ctx.beginPath(); ctx.moveTo(cs, (hr + 1) * cs); ctx.lineTo((W + 1) * cs, (hr + 1) * cs); ctx.stroke();
+    ctx.strokeStyle = `rgba(${RGB.B},.55)`; ctx.beginPath(); ctx.moveTo(cs, (H - hr + 1) * cs); ctx.lineTo((W + 1) * cs, (H - hr + 1) * cs); ctx.stroke();
+    ctx.restore();
+    for (let x = 0; x < W; x++) {
+      if (game.pts.B[x] === '1') { cellRect(x, 0, `rgba(${RGB.B},.12)`); diamond(x, 0, cs * 0.2, COL.B); }
+      if (game.pts.R[x] === '1') { cellRect(x, H - 1, `rgba(${RGB.R},.12)`); diamond(x, H - 1, cs * 0.2, COL.R); }
+    }
+  }
+
   // last move
   const lm = game.lastMove;
   if (lm && !paintBoard) {
@@ -612,9 +664,8 @@ function render() {
   const bl = mode === 'play' ? selBlob() : null;
   const grip = bl ? (drag ? { x: drag.gx, y: drag.gy } : { x: sel.x, y: sel.y }) : null;
   if (bl) {
-    const T = G.blobTranslations(game, info, bl);
     ctx.fillStyle = `rgba(${RGB[bl.color]},.16)`;
-    for (const [dx, dy] of T.list) {
+    for (const [dx, dy] of G.legalOffsets(game, info, bl)) {
       const x = grip.x + dx, y = grip.y + dy;
       if (inView(x, y)) ctx.fillRect((x + 1) * cs, (y + 1) * cs, cs, cs);
     }
@@ -628,7 +679,8 @@ function render() {
     if (x + 1 < W && b[y][x + 1] === c) ctx.fillRect(PX(x), PX(y) - th / 2, cs, th);
     if (y + 1 < H && b[y + 1][x] === c) ctx.fillRect(PX(x) - th / 2, PX(y), th, cs);
   }
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b[y][x]) drawStone(x, y, b[y][x]);
+  const carrying = pm ? G.carrySet(game) : null;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b[y][x]) drawStone(x, y, b[y][x], 1, !!carrying && carrying.has(x + ',' + y));
 
   setPreview('');
 
@@ -651,9 +703,9 @@ function render() {
   if (sel.level === 1) {
     ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(PX(sel.x), PX(sel.y), cs * 0.47); ctx.stroke();
     for (const t of G.kingTargets(game, info, sel.x, sel.y)) {
-      if (t.o === 'self') { cross(PX(t.tx), PX(t.ty), cs * 0.14, COL.x, .25); continue; }
+      if (t.o === 'self' || t.o === 'blocked') { if (inView(t.tx, t.ty)) cross(PX(t.tx), PX(t.ty), cs * 0.14, COL.x, .25); continue; }
       if (hover && hover.x === t.tx && hover.y === t.ty) cellRect(t.tx, t.ty, `rgba(${RGB[c]},.22)`);
-      marker(t.tx, t.ty, t.o, c);
+      if (pm) pointsMarker(t, true); else marker(t.tx, t.ty, t.o, c);
     }
     return;
   }
@@ -672,23 +724,34 @@ function render() {
   }
   ctx.stroke(); ctx.restore();
   ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(PX(grip.x), PX(grip.y), cs * 0.47); ctx.stroke();
+  if (pm) {
+    ctx.save(); ctx.setLineDash([4, 3]); ctx.lineWidth = 2.5; ctx.strokeStyle = COL.sel;
+    for (const [x, y] of G.clusterOf(info, bl).cells) if (!inBlob(x, y)) { circle(PX(x), PX(y), cs * 0.47); ctx.stroke(); }
+    ctx.restore();
+  }
 
   // ghost preview of the blob at the hovered / dragged / keyboard offset
   let off = null;
   if (kbd) off = kbd;
   else if (hover && inView(hover.x, hover.y) && (!drag || drag.moved)) off = { dx: hover.x - grip.x, dy: hover.y - grip.y };
   if (!off || (!off.dx && !off.dy)) return;
-  const valid = G.isValidT(G.blobTranslations(game, info, bl), off.dx, off.dy);
-  const moves = G.blobMoves(game, info, bl, off.dx, off.dy);
+  const plan = G.blobPlan(game, info, bl, off.dx, off.dy);
+  const valid = plan.valid, moves = plan.moves;
   for (const m of moves) {
     if (!inView(m.tx, m.ty)) continue;
-    if (valid) cellRect(m.tx, m.ty, `rgba(${RGB[c]},.26)`);
-    if (onBoard(m.tx, m.ty) && (m.o === 'empty' || m.o === 'win' || !valid)) drawStone(m.tx, m.ty, c, valid ? .5 : .18);
+    if (valid) cellRect(m.tx, m.ty, `rgba(${RGB[m.c]},.26)`);
+    if (onBoard(m.tx, m.ty) && (m.o === 'empty' || m.o === 'win' || !valid)) drawStone(m.tx, m.ty, m.c, valid ? .5 : .18, valid && !!m.carry);
   }
-  if (valid) for (const m of moves) if (inView(m.tx, m.ty) && m.o !== 'empty') marker(m.tx, m.ty, m.o, c);
   if (valid) {
-    const parts = G.summarize(moves);
+    for (const m of moves) if (inView(m.tx, m.ty)) { if (pm) pointsMarker(m, false); else if (m.o !== 'empty') marker(m.tx, m.ty, m.o, m.c); }
+    const parts = [...(plan.dragged ? [`dragging ${plan.dragged} stuck stone${plan.dragged > 1 ? 's' : ''}`] : []), ...G.summarize(moves, bl.color)];
     setPreview(`Move ${G.offsetText(off.dx, off.dy)}${parts.length ? ' — ' + parts.join(', ') : ''}.${kbd ? ' Press Enter to confirm.' : ''}`);
+  } else if (plan.reason === G.BLOCKED_BLOB) {
+    for (const m of moves) if (m.o === 'blocked' && inView(m.tx, m.ty)) cross(PX(m.tx), PX(m.ty), cs * 0.2, COL.x, .7);
+    setPreview('Blocked — something would run into a wall or another stone.', true);
+  } else if (plan.reason === G.GIFT_BLOB) {
+    for (const m of moves) if (m.gift) cross(PX(m.tx), PX(m.ty), cs * 0.22, COL.x, .8);
+    setPreview('Illegal — that would drag an opponent\'s stone onto one of their own points.', true);
   } else {
     setPreview('Not reachable — the new position must overlap or edge-touch the old one.', true);
   }
@@ -705,6 +768,10 @@ function updateUI() {
   $('countB').textContent = nB;
   $('wordR').textContent = nR === 1 ? 'stone' : 'stones';
   $('wordB').textContent = nB === 1 ? 'stone' : 'stones';
+  $('carryR').textContent = game.carry.filter(([x, y]) => b[y] && b[y][x] === 'R').length;
+  $('carryB').textContent = game.carry.filter(([x, y]) => b[y] && b[y][x] === 'B').length;
+  document.body.dataset.mode = game.opts.mode;
+  $('gmode').value = game.opts.mode;
   const seats = online && online.room ? online.room.seats : null;
   $('nameR').textContent = seats && seats.R ? seats.R.name : 'Red';
   $('nameB').textContent = seats && seats.B ? seats.B.name : 'Blue';
@@ -717,7 +784,7 @@ function updateUI() {
   $('addB').classList.toggle('active', mode === 'B');
   $('addR').classList.toggle('active', mode === 'R');
   const locked = spectating();
-  for (const id of ['addB', 'addR', 'switchTurn', 'resetScores', 'clear', 'applySize', 'bw', 'bh', 'pastePos', 'load', 'codeLoad', 'enforce', 'order', 'singleSize']) $(id).disabled = locked;
+  for (const id of ['addB', 'addR', 'switchTurn', 'resetScores', 'clear', 'applySize', 'bw', 'bh', 'pastePos', 'load', 'codeLoad', 'enforce', 'order', 'singleSize', 'gmode']) $(id).disabled = locked;
   $('undo').disabled = locked || !game.history.length;
   if (locked && mode !== 'play') mode = 'play';
 
@@ -775,6 +842,9 @@ function changed() {
   if (!$('gameView').hidden && (game.W !== canvasW || game.H !== canvasH)) resize();
   updateUI(); renderLog(); render();
 }
+
+// Read-only handle for debugging in the browser console: __rvb.game, __rvb.cs
+window.__rvb = { get game() { return game; }, get cs() { return cs; } };
 
 /* ---------- start ---------- */
 const params = new URLSearchParams(location.search);

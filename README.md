@@ -62,6 +62,26 @@ most of them tiny version checks. Compare that with your Redis plan's limits. To
 poll less often, change the numbers in the last line of `poll()` in `public/app.js`
 (1000 ms waiting / 2500 ms your turn / 6000 ms tab hidden).
 
+## Game modes
+
+Pick the mode under **Options → Game mode**. In an online room the mode is shared,
+and switching it puts every point back.
+
+- **Classic**: stones fight. When stones collide, the attacker loses if its blob is
+  bigger than the defender's. Blue scores by leaving through the top wall and Red
+  through the bottom wall.
+- **Points**:
+  - Stones never die, and can't move into walls or other stones.
+  - Blue's points are the squares of the top row, and Red's are the bottom row.
+  - A stone that lands on one of its own points picks it up. The stone turns lighter
+    with a gold dot, and it can carry one point at a time.
+  - The point scores when that stone reaches home. Blue's home is the bottom 5 rows
+    and Red's is the top 5 rows.
+  - Moving a blob drags everything stuck to it (any chain of touching stones, of
+    either color). The blob's move is only legal if nothing in the group would hit a
+    wall or another stone, and if it wouldn't drag an opponent's stone onto one of
+    their own points (a square in their point row whose point is still there).
+
 ## Game features
 
 Everything from the single-file version works in online rooms too, and everyone in
