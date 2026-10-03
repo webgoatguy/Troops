@@ -64,7 +64,7 @@ poll less often, change the numbers in the last line of `poll()` in `public/app.
 
 ## Game modes
 
-Pick the mode under **Options → Game mode** (Classic, Points or Hybrid). In an online room the mode is shared,
+Pick the mode under **Options → Game mode** (Classic, Points, Hybrid or Hexagonal). In an online room the mode is shared,
 and switching it puts every point back.
 
 - **Classic**: stones fight. When stones collide, the attacker loses if its blob is
@@ -94,6 +94,22 @@ and switching it puts every point back.
   - Stones never die. Nothing may move into another stone (either color), a side
     wall, or its own back wall, and a blob move is all or nothing.
   - Moving a blob never drags other stones along.
+
+- **Hexagonal**: Hybrid rules on a hexagon board that runs sideways.
+  - The board is a hexagon of hexes, wider than it is tall. **Side** sets how many
+    hexes run along each slanted edge (so how tall it is), and **length** sets how
+    many hexes run along the flat top and bottom edges (so how stretched it is).
+  - Blue scores by moving stones off the two right-hand edges, and Red off the two
+    left-hand edges. Stones that cross score; the rest of a blob stays on the board.
+  - The top and bottom edges are walls, and so are each player's own back edges.
+    Stones never die and can't move into other stones.
+  - A stone moves to any of the 6 hexes touching it, and blobs are hexes that share an
+    edge.
+  - **Deletes:** 3 times per game, a player can use one move to delete a whole
+    opponent blob. Press *Delete a blob*, then click it. With the 1-2-2-2 order, a
+    delete plus one ordinary move makes up a 2-move turn. Clear board gives the
+    deletes back.
+  - Switching to or from Hexagonal starts a fresh board (Undo brings the old one back).
 
 ## Game features
 

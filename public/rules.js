@@ -11,6 +11,11 @@
 //   'hybrid'  — Classic scoring (Blue off the top wall, Red off the bottom wall; stones that
 //               cross score, the rest of a blob stays), but stones never die: nothing may move
 //               into another stone, a side wall or its own back wall. Blobs move on their own.
+//   'hex'     — Hybrid rules on a hexagon-shaped board of hexes (stored in axial coordinates
+//               x = q, y = r; pointy-top cells, flat top/bottom board edges). The board runs
+//               sideways: Blue scores off the two right-hand edges, Red off the two left-hand
+//               edges; top/bottom edges and your own back edges block. Each player also has
+//               3 deletes: instead of a move, remove one whole opponent blob.
 
 export const MIN_W = 3, MAX_W = 120, MIN_H = 3, MAX_H = 80;
 export const HOME_ROWS = 5;
@@ -20,6 +25,11 @@ export const opp = c => (c === 'R' ? 'B' : 'R');
 const HISTORY_MAX = 60;   // undo depth
 const LOG_MAX = 300;      // move-log entries kept
 const ARROW = { '-1,-1': '↖', '0,-1': '↑', '1,-1': '↗', '-1,0': '←', '1,0': '→', '-1,1': '↙', '0,1': '↓', '1,1': '↘' };
+const HEX_ARROW = { '1,0': '→', '-1,0': '←', '0,-1': '↖', '1,-1': '↗', '0,1': '↘', '-1,1': '↙' };
+export const HEX_DIRS = [[1, 0], [-1, 0], [0, -1], [1, -1], [0, 1], [-1, 1]];   // axial neighbours
+const KING8 = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+export const HEX_MIN_S = 2, HEX_MAX_S = 30, HEX_MIN_L = 1, HEX_MAX_L = 60, HEX_DEF_S = 7, HEX_DEF_L = 10;
+export const DELETES = 3;
 const key = (x, y) => x + ',' + y;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export const CANT = 'The blob can\'t go there — its new position has to overlap or edge-touch where it is now.';
@@ -28,6 +38,8 @@ export const BLOCKED_BLOB_H = 'That would push the blob into another stone, a si
 export const BLOCKED_BLOB = 'That would push the blob (or something stuck to it) into a wall or another stone.';
 export const GIFT_BLOB = 'Illegal — that would put a stone onto one of its opponent\'s points.';
 export const BLOCKED_KING_H = 'In Hybrid mode stones can\'t move into other stones, the side walls or their own back wall.';
+export const BLOCKED_KING_X = 'In Hexagonal mode stones can\'t move into other stones, the top/bottom walls or their own back edges.';
+export const BLOCKED_BLOB_X = 'That would push the blob into another stone, the top/bottom wall or its own back edges.';
 export const FORBIDDEN_KING = 'Illegal — a stone can\'t move onto its opponent\'s points.';
 
 export function emptyBoard(W, H) { return Array.from({ length: H }, () => Array(W).fill(null)); }
@@ -40,22 +52,38 @@ export function newGame(W = 48, H = 24, opts = {}) {
     opts: { enforce: true, order: '122', singleSize: 'one', mode: 'classic', ...opts },
     pts: { B: fullPts(W), R: fullPts(W) },   // Points mode: '1' = point still on that square
     carry: [],                               // Points mode: [x, y] of stones carrying a point
+    hex: null,                               // Hexagonal mode: { side, length }
+    deletes: { B: DELETES, R: DELETES },     // Hexagonal mode: blob deletes left
     log: [], moveNo: 0, history: [], lastMove: null,
   };
+}
+// Hexagon of hexes: 2*side-1 rows; the top/bottom rows have `length` hexes, the middle row length+side-1.
+export const hexDims = (side, length) => ({ W: length + side - 1, H: 2 * side - 1 });
+export const hexRowStart = (g, y) => Math.max(0, g.hex.side - 1 - y);
+export const hexRowEnd = (g, y) => g.W - 1 - Math.max(0, y - (g.hex.side - 1));
+function setHexBoard(g, side, length) {
+  const { W, H } = hexDims(side, length);
+  g.hex = { side, length }; g.W = W; g.H = H; g.board = emptyBoard(W, H);
 }
 // Fill in fields that games saved by older versions don't have.
 export function normalize(g) {
   if (!g.opts.mode) g.opts.mode = 'classic';
   if (!g.pts || typeof g.pts.B !== 'string' || g.pts.B.length !== g.W || g.pts.R.length !== g.W) g.pts = { B: fullPts(g.W), R: fullPts(g.W) };
   if (!Array.isArray(g.carry)) g.carry = [];
+  if (g.hex === undefined) g.hex = null;
+  if (!g.deletes) g.deletes = { B: DELETES, R: DELETES };
   if (isPoints(g)) sanitizePoints(g);
   return g;
 }
 
-export const onBoard = (g, x, y) => x >= 0 && x < g.W && y >= 0 && y < g.H;
+export const onBoard = (g, x, y) => x >= 0 && x < g.W && y >= 0 && y < g.H && (!g.hex || (x >= hexRowStart(g, y) && x <= hexRowEnd(g, y)));
 export const isPoints = g => g.opts.mode === 'points';
 export const isHybrid = g => g.opts.mode === 'hybrid';
-export const MODES = ['classic', 'points', 'hybrid'];
+export const isHex = g => g.opts.mode === 'hex';
+export const hybridLike = g => isHybrid(g) || isHex(g);   // no deaths, no collisions, far-wall scoring
+export const MODES = ['classic', 'points', 'hybrid', 'hex'];
+// Human-readable cell name: (column, row); in hex mode the column counts along that row.
+export const cellName = (g, x, y) => `(${g.hex ? x - hexRowStart(g, y) + 1 : x + 1}, ${y + 1})`;
 export const carrySet = g => new Set(g.carry.map(([x, y]) => key(x, y)));
 export const inHome = (g, c, y) => (c === 'B' ? y >= g.H - HOME_ROWS : y < HOME_ROWS);
 export const pointRow = (g, c) => (c === 'B' ? 0 : g.H - 1);
@@ -98,7 +126,7 @@ function flood(g, grid, idx, x, y, same) {
   while (stack.length) {
     const [cx, cy] = stack.pop();
     cells.push([cx, cy]);
-    for (const [dx, dy] of DIRS4) {
+    for (const [dx, dy] of g.hex ? HEX_DIRS : DIRS4) {
       const nx = cx + dx, ny = cy + dy;
       if (nx >= 0 && nx < W && ny >= 0 && ny < H && grid[ny][nx] < 0 && b[ny][nx] && same(b[ny][nx])) { grid[ny][nx] = idx; stack.push([nx, ny]); }
     }
@@ -157,6 +185,12 @@ function pointsOutcome(g, tx, ty, vacated) {
    'score' when leaving through your far wall (straight through it, not a corner),
    'empty' for a free square, otherwise 'blocked'. */
 function hybridOutcome(g, color, tx, ty, vacated) {
+  if (g.hex && !onBoard(g, tx, ty)) {
+    // leaving up/down hits the top/bottom wall; leaving sideways crosses a left/right edge
+    if (ty < 0 || ty >= g.H) return 'blocked';
+    const right = tx > hexRowEnd(g, ty);
+    return (color === 'B' && right) || (color === 'R' && !right) ? 'score' : 'blocked';
+  }
   if (!onBoard(g, tx, ty)) {
     const through = tx >= 0 && tx < g.W;
     return through && ((color === 'B' && ty < 0) || (color === 'R' && ty >= g.H)) ? 'score' : 'blocked';
@@ -181,10 +215,9 @@ function annotatePoints(g, moves) {
 export function kingTargets(g, info, x, y) {
   const c = g.board[y][x], out = [];
   const pm = isPoints(g), atk = pm ? 0 : singleAtk(g, info, x, y);
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-    if (!dx && !dy) continue;
+  for (const [dx, dy] of g.hex ? HEX_DIRS : KING8) {
     const tx = x + dx, ty = y + dy;
-    let o = pm ? pointsOutcome(g, tx, ty) : isHybrid(g) ? hybridOutcome(g, c, tx, ty) : outcome(g, info, c, tx, ty, atk);
+    let o = pm ? pointsOutcome(g, tx, ty) : hybridLike(g) ? hybridOutcome(g, c, tx, ty) : outcome(g, info, c, tx, ty, atk);
     if (pm && o === 'empty' && !pointAllowed(g, c, tx, ty)) o = 'forbidden';
     out.push({ fx: x, fy: y, tx, ty, dx, dy, c, o });
   }
@@ -207,7 +240,7 @@ export function blobTranslations(g, info, bl) {
   const list = [];
   for (let dx = -g.W; dx <= g.W; dx++) for (let dy = -g.H; dy <= g.H; dy++) {
     if (!diff[idx(dx, dy)]) continue;
-    for (const [ex, ey] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const [ex, ey] of [[0, 0], ...(g.hex ? HEX_DIRS : DIRS4)]) {
       const i = idx(dx + ex, dy + ey);
       if (!ok[i] && (dx + ex || dy + ey)) { ok[i] = 1; list.push([dx + ex, dy + ey]); }
     }
@@ -229,10 +262,10 @@ export function blobMoves(g, info, bl, dx, dy) {
 export function blobPlan(g, info, bl, dx, dy) {
   const T = blobTranslations(g, info, bl);
   const shapeOk = isValidT(T, dx, dy);
-  if (isHybrid(g)) {
+  if (hybridLike(g)) {
     const moves = bl.cells.map(([x, y]) => ({ fx: x, fy: y, tx: x + dx, ty: y + dy, c: bl.color, o: hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) }));
     const blocked = moves.some(m => m.o === 'blocked');
-    return { valid: shapeOk && !blocked, reason: !shapeOk ? CANT : blocked ? BLOCKED_BLOB_H : '', moves, dragged: 0 };
+    return { valid: shapeOk && !blocked, reason: !shapeOk ? CANT : blocked ? (g.hex ? BLOCKED_BLOB_X : BLOCKED_BLOB_H) : '', moves, dragged: 0 };
   }
   if (!isPoints(g)) {
     return { valid: shapeOk, reason: shapeOk ? '' : CANT, moves: blobMoves(g, info, bl, dx, dy), dragged: 0 };
@@ -255,7 +288,7 @@ export function blobPlan(g, info, bl, dx, dy) {
 // Every legal offset for blob `bl` in the current mode (used to shade reachable squares).
 export function legalOffsets(g, info, bl) {
   const T = blobTranslations(g, info, bl);
-  if (isHybrid(g)) {
+  if (hybridLike(g)) {
     if (!T.legalHybrid) T.legalHybrid = T.list.filter(([dx, dy]) => bl.cells.every(([x, y]) => hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) !== 'blocked'));
     return T.legalHybrid;
   }
@@ -272,7 +305,17 @@ export function legalOffsets(g, info, bl) {
   return T.legalPoints;
 }
 
-export function offsetText(dx, dy) {
+const HEX_PAIRS = [[[1, 0], [0, 1]], [[0, 1], [-1, 1]], [[-1, 1], [-1, 0]], [[-1, 0], [0, -1]], [[0, -1], [1, -1]], [[1, -1], [1, 0]]];
+export function offsetText(dx, dy, g) {
+  if (g && g.hex) {
+    for (const [d1, d2] of HEX_PAIRS) {             // dx,dy = a*d1 + b*d2 with a, b >= 0
+      const det = d1[0] * d2[1] - d1[1] * d2[0];
+      const a = (dx * d2[1] - dy * d2[0]) / det, b = (d1[0] * dy - d1[1] * dx) / det;
+      if (a >= 0 && b >= 0 && Number.isInteger(a) && Number.isInteger(b)) {
+        return [[a, d1], [b, d2]].filter(([n]) => n).map(([n, d]) => `${n} ${HEX_ARROW[d.join(',')]}`).join(', ');
+      }
+    }
+  }
   const p = [];
   if (dx) p.push(`${Math.abs(dx)} ${dx > 0 ? 'right' : 'left'}`);
   if (dy) p.push(`${Math.abs(dy)} ${dy > 0 ? 'down' : 'up'}`);
@@ -330,6 +373,15 @@ function unrle(s, re, W) {
   return out.length > W ? null : out;
 }
 export function encodePosition(g) {
+  if (g.hex) {
+    const rows = [];
+    for (let y = 0; y < g.H; y++) {
+      const toks = [];
+      for (let x = hexRowStart(g, y); x <= hexRowEnd(g, y); x++) toks.push(g.board[y][x] ? g.board[y][x].toLowerCase() : '.');
+      rows.push(rle(toks, true));
+    }
+    return `RVB3;hex;${g.hex.side}x${g.hex.length};${g.turn}${g.left}/${g.per};R${g.scores.R}B${g.scores.B};D${g.deletes.B}.${g.deletes.R};${rows.join('/')}`;
+  }
   const pm = isPoints(g), cs = pm ? carrySet(g) : null;
   const rows = g.board.map((row, y) => rle(row.map((c, x) => (!c ? '.' : pm && cs.has(key(x, y)) ? c : c.toLowerCase())), true));
   const head = `${g.W}x${g.H};${g.turn}${g.left}/${g.per};R${g.scores.R}B${g.scores.B};${rows.join('/')}`;
@@ -338,8 +390,29 @@ export function encodePosition(g) {
   const pts = c => rle([...g.pts[c]].map(v => (v === '1' ? 'o' : 'x')), false);
   return `RVB2;p;${head};${pts('B')};${pts('R')}`;
 }
+function decodeHex(t) {
+  const m = t.match(/^RVB3;hex;(\d+)x(\d+);([RB])(\d+)\/(\d+);R(\d+)B(\d+);D(\d+)\.(\d+);(.*)$/);
+  if (!m) return null;
+  const side = +m[1], length = +m[2];
+  if (side < HEX_MIN_S || side > HEX_MAX_S || length < HEX_MIN_L || length > HEX_MAX_L) return null;
+  const { W, H } = hexDims(side, length), shape = { W, H, hex: { side, length } };
+  const rows = m[10].split('/');
+  if (rows.length !== H) return null;
+  const board = emptyBoard(W, H);
+  for (let y = 0; y < H; y++) {
+    const x0 = hexRowStart(shape, y), n = hexRowEnd(shape, y) - x0 + 1;
+    const toks = unrle(rows[y].toLowerCase(), /(\d*)([rb.])/g, n);
+    if (!toks) return null;
+    toks.forEach((tk, i) => { if (tk !== '.') board[y][x0 + i] = tk.toUpperCase(); });
+  }
+  const per = Math.min(9, Math.max(1, +m[5])), left = Math.min(per, Math.max(1, +m[4]));
+  const d = v => Math.min(DELETES, +v);
+  return { W, H, board, turn: m[3], per, left, scores: { R: +m[6], B: +m[7] }, mode: 'hex',
+    hex: { side, length }, deletes: { B: d(m[8]), R: d(m[9]) }, pts: null, carry: [] };
+}
 export function decodePosition(text) {
   const t = String(text || '').replace(/\s+/g, '');
+  if (t.startsWith('RVB3;')) return decodeHex(t);
   let m = t.match(/^RVB1;(\d+)x(\d+);([RB])(\d+)\/(\d+);R(\d+)B(\d+);(.*)$/i), mode = null, ptsB = null, ptsR = null;
   if (!m) {
     const m2 = t.match(/^RVB2;([pch]);(\d+x\d+;[RB]\d+\/\d+;R\d+B\d+;[^;]*);([ox\d]*);([ox\d]*)$/);
@@ -379,6 +452,8 @@ function setPosition(g, pos) {
   g.turn = pos.turn; g.per = pos.per; g.left = pos.left; g.scores = pos.scores;
   g.pts = pos.pts || { B: fullPts(pos.W), R: fullPts(pos.W) };
   g.carry = pos.carry || [];
+  g.hex = pos.hex || null;
+  g.deletes = pos.deletes || { B: DELETES, R: DELETES };
   sanitizePoints(g);
 }
 
@@ -484,12 +559,14 @@ export function applyAction(g, a, actor = {}) {
       const color = g.board[fy][fx];
       const bad = moveProblem(g, color, actor); if (bad) return fail(bad);
       const dx = tx - fx, dy = ty - fy;
-      if (!(dx || dy) || Math.abs(dx) > 1 || Math.abs(dy) > 1) return fail('A single stone moves one square in any direction.');
-      const label = `moved stone at (${fx + 1}, ${fy + 1}) ${ARROW[dx + ',' + dy]}`;
+      if (!(g.hex ? HEX_DIRS : KING8).some(([a, b]) => a === dx && b === dy)) {
+        return fail(g.hex ? 'A single stone moves to one of the six hexes touching it.' : 'A single stone moves one square in any direction.');
+      }
+      const label = `moved stone at ${cellName(g, fx, fy)} ${(g.hex ? HEX_ARROW : ARROW)[dx + ',' + dy]}`;
       const info = computeBlobs(g);
-      if (isHybrid(g)) {
+      if (hybridLike(g)) {
         const m = kingTargets(g, info, fx, fy).find(t => t.tx === tx && t.ty === ty);
-        if (m.o === 'blocked') return fail(BLOCKED_KING_H);
+        if (m.o === 'blocked') return fail(g.hex ? BLOCKED_KING_X : BLOCKED_KING_H);
         pushHistory(g);
         return done(executeHybrid(g, [m], color, label), true);
       }
@@ -512,10 +589,31 @@ export function applyAction(g, a, actor = {}) {
       const plan = blobPlan(g, info, bl, dx, dy);
       if (!plan.valid) return fail(plan.reason);
       pushHistory(g);
-      const label = `moved ${bl.size}-stone blob ${offsetText(dx, dy)}` + (plan.dragged ? ` (dragging ${plural(plan.dragged, 'stuck stone')})` : '');
+      const label = `moved ${bl.size}-stone blob ${offsetText(dx, dy, g)}` + (plan.dragged ? ` (dragging ${plural(plan.dragged, 'stuck stone')})` : '');
       return done(pm ? executePoints(g, plan.moves, bl.color, label)
-        : isHybrid(g) ? executeHybrid(g, plan.moves, bl.color, label)
+        : hybridLike(g) ? executeHybrid(g, plan.moves, bl.color, label)
         : executeClassic(g, info, bl.color, plan.moves, bl.size, label), true);
+    }
+
+    case 'delete': {
+      if (!g.hex) return fail('Deleting blobs is only possible in Hexagonal mode.');
+      const { x, y } = a;
+      if (![x, y].every(isInt)) return fail('Bad delete.');
+      if (!onBoard(g, x, y) || !g.board[y][x]) return fail('There\'s no stone there.');
+      const info = computeBlobs(g), bl = blobAt(g, info, x, y), mover = opp(bl.color);
+      if (actor.color && actor.color !== mover) return fail('You can only delete your opponent\'s blobs.');
+      if (g.opts.enforce && mover !== g.turn) return fail(`It's ${NAME[g.turn]}'s turn — ${NAME[g.turn]} can only delete ${NAME[opp(g.turn)].toLowerCase()} blobs.`);
+      if (g.deletes[mover] <= 0) return fail(`${NAME[mover]} has used all ${DELETES} deletes.`);
+      pushHistory(g);
+      for (const [cx, cy] of bl.cells) g.board[cy][cx] = null;
+      g.deletes[mover]--;
+      advanceTurn(g, mover);
+      g.moveNo++;
+      const left = g.deletes[mover];
+      const text = `deleted a ${bl.size}-stone ${NAME[bl.color].toLowerCase()} blob (${left} delete${left === 1 ? '' : 's'} left)`;
+      addLog(g, { n: g.moveNo, c: mover, t: text });
+      g.lastMove = { c: mover, from: bl.cells, to: [] };
+      return done(`${NAME[mover]} ${text}.`, true);
     }
 
     case 'edit': {
@@ -545,6 +643,25 @@ export function applyAction(g, a, actor = {}) {
     }
 
     case 'resize': {
+      if (g.hex) {
+        if (!isInt(a.side) || !isInt(a.length)) return fail('Bad size.');
+        const S = Math.max(HEX_MIN_S, Math.min(HEX_MAX_S, a.side)), L = Math.max(HEX_MIN_L, Math.min(HEX_MAX_L, a.length));
+        if (S === g.hex.side && L === g.hex.length) return done(`The board is already side ${S}, length ${L}.`);
+        pushHistory(g);
+        // keep the stones centred: shift rows by dr and axial columns by dq
+        const dr = S - g.hex.side, dq = Math.floor(((L - g.hex.length) + dr) / 2);
+        const old = g.board, oldH = g.H, oldW = g.W;
+        setHexBoard(g, S, L);
+        let dropped = 0;
+        for (let y = 0; y < oldH; y++) for (let x = 0; x < oldW; x++) {
+          const c = old[y][x]; if (!c) continue;
+          if (onBoard(g, x + dq, y + dr)) g.board[y + dr][x + dq] = c; else dropped++;
+        }
+        g.lastMove = null; resetPoints(g);
+        const drop = dropped ? ` — ${dropped === 1 ? '1 stone that no longer fit was' : dropped + ' stones that no longer fit were'} removed` : '';
+        note(`resized the hex board to side ${S}, length ${L}${drop}`, `Hex board resized to side ${S}, length ${L}${drop}`);
+        return done(`Hex board resized to side ${S}, length ${L}${drop}.${dropped ? ' (Undo brings them back.)' : ''}`);
+      }
       if (!isInt(a.w) || !isInt(a.h)) return fail('Bad size.');
       const w = Math.max(MIN_W, Math.min(MAX_W, a.w)), h = Math.max(MIN_H, Math.min(MAX_H, a.h));
       if (w === g.W && h === g.H) return done(`The board is already ${w} × ${h}.`);
@@ -572,6 +689,7 @@ export function applyAction(g, a, actor = {}) {
       pushHistory(g);
       g.board = emptyBoard(g.W, g.H); g.scores = { R: 0, B: 0 }; g.lastMove = null; g.moveNo = 0;
       resetPoints(g);
+      g.deletes = { B: DELETES, R: DELETES };
       restartOrder(g);
       note('cleared the board — turn order restarted', 'Board cleared — turn order restarted');
       return done('Board cleared and turn order restarted. (Undo brings it back.)');
@@ -602,17 +720,21 @@ export function applyAction(g, a, actor = {}) {
       if (!pos) return fail('That isn\'t a valid position code (it should start with RVB1; or RVB2;).');
       pushHistory(g);
       setPosition(g, pos);
-      if (pos.mode) g.opts.mode = pos.mode;
+      g.opts.mode = pos.mode || (isHex(g) ? 'classic' : g.opts.mode);   // a square code can't be played on a hex board
       g.lastMove = null;
-      const m = pos.mode === 'points' ? ', Points mode' : pos.mode === 'hybrid' ? ', Hybrid mode' : '';
-      note(`loaded a position (${pos.W} × ${pos.H}${m})`, `Position loaded (${pos.W} × ${pos.H}${m})`);
-      return done(`Position loaded (${pos.W} × ${pos.H} board${m}).`);
+      const m = { points: ', Points mode', hybrid: ', Hybrid mode', hex: ', Hexagonal mode' }[pos.mode] || '';
+      const dims = pos.hex ? `side ${pos.hex.side}, length ${pos.hex.length}` : `${pos.W} × ${pos.H}`;
+      note(`loaded a position (${dims}${m})`, `Position loaded (${dims}${m})`);
+      return done(`Position loaded (${dims}${m}).`);
     }
 
     case 'undo': {
       if (!g.history.length) return fail('Nothing to undo.');
       const h = g.history.pop();
-      setPosition(g, decodePosition(h.code));
+      const pos = decodePosition(h.code);
+      setPosition(g, pos);
+      // undoing across a switch between square and hex boards also restores the mode
+      if (!!pos.hex !== isHex(g)) g.opts.mode = pos.mode || 'classic';
       g.log.length = Math.min(g.log.length, h.logLen);
       g.moveNo = h.moveNo;
       g.lastMove = h.lastMove || null;
@@ -623,10 +745,16 @@ export function applyAction(g, a, actor = {}) {
     case 'options': {
       const said = [];
       if (MODES.includes(a.mode) && a.mode !== g.opts.mode) {
+        const toHex = a.mode === 'hex', fromHex = isHex(g);
+        if (toHex || fromHex) pushHistory(g);            // the board changes shape; Undo brings it back
         g.opts.mode = a.mode;
+        if (toHex) setHexBoard(g, HEX_DEF_S, HEX_DEF_L);
+        else if (fromHex) { g.hex = null; g.W = 48; g.H = 24; g.board = emptyBoard(48, 24); }
+        if (toHex || fromHex) { g.lastMove = null; g.deletes = { B: DELETES, R: DELETES }; }
         resetPoints(g);
         said.push({ classic: 'game mode Classic', points: 'game mode Points (collect points and bring them home)',
-          hybrid: 'game mode Hybrid (classic scoring, but stones never die or collide)' }[a.mode]);
+          hybrid: 'game mode Hybrid (classic scoring, but stones never die or collide)',
+          hex: 'game mode Hexagonal (Hybrid rules on a hex board, 3 deletes each)' }[a.mode]);
       }
       if (typeof a.enforce === 'boolean' && a.enforce !== g.opts.enforce) {
         g.opts.enforce = a.enforce; said.push(`turns ${a.enforce ? 'enforced' : 'not enforced'}`);

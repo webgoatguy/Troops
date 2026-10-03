@@ -16,13 +16,17 @@ const ORD = ['', 'first', 'second', 'third'];
 
 const canvas = $('board');
 const ctx = canvas.getContext('2d');
-let cs = 22, canvasW = 0, canvasH = 0;
+let cs = 22, canvasKey = '', canvasPxW = 0, canvasPxH = 0;
+const SQ3 = Math.sqrt(3);
+let hexO = { x: 0, y: 0 };   // hex mode: pixel centre of axial cell (0, 0)
+const shapeKey = () => (game.hex ? `h${game.hex.side}x${game.hex.length}` : `${game.W}x${game.H}`);
 
 /* ---------- state ---------- */
 let game = G.newGame();
 let info = G.computeBlobs(game);
 let online = null;       // { code, version, room, pending, epoch, chain, timer }
-let mode = 'play';       // 'play' | 'R' | 'B' (placing stones)
+let mode = 'play';       // 'play' | 'R' | 'B' (placing stones) | 'del' (hex: deleting a blob)
+const placing = () => mode === 'R' || mode === 'B';
 let sel = null;          // { x, y, level: 1 (king) | 2 (blob) }
 let hover = null;
 let painting = null, paintBoard = null, paintChanges = null;
@@ -43,7 +47,8 @@ const PLAYER = (() => {
 const savedName = () => store.get('rvb-name') || '';
 
 const onBoard = (x, y) => G.onBoard(game, x, y);
-const inView = (x, y) => x >= -1 && x <= game.W && y >= -1 && y <= game.H;
+const inView = (x, y) => (game.hex ? onBoard(x, y) || G.HEX_DIRS.some(([a, b]) => onBoard(x + a, y + b))
+  : x >= -1 && x <= game.W && y >= -1 && y <= game.H);
 const blobAt = (x, y) => G.blobAt(game, info, x, y);
 const selBlob = () => (sel && sel.level === 2 ? blobAt(sel.x, sel.y) : null);
 const me = () => (online && online.room ? online.room.you : null);
@@ -55,7 +60,7 @@ function dispatch(action) {
   const r = G.applyAction(game, action, actor());
   if (!r.ok) { message = esc(r.error); showTurn = false; changed(); return false; }
   message = esc(r.message); showTurn = r.moved;
-  if (r.moved) { sel = null; drag = null; kbd = null; }
+  if (r.moved) { sel = null; drag = null; kbd = null; if (mode === 'del') mode = 'play'; }
   changed();
   if (online) sendAction(action); else saveLocal();
   return true;
@@ -230,7 +235,7 @@ function showLobby(opts = {}) {
 function showGame() {
   $('lobby').hidden = true; $('gameView').hidden = false; $('scorebar').hidden = false; $('menuBtn').hidden = false;
   $('optsShared').hidden = !online;
-  canvasW = 0;                                       // force a canvas resize
+  canvasKey = '';                                    // force a canvas resize
   changed();
 }
 
@@ -307,7 +312,20 @@ function startLocal() {
 /* ---------- input ---------- */
 function cellAt(e) {
   const r = canvas.getBoundingClientRect();
-  return { x: Math.floor((e.clientX - r.left) / cs) - 1, y: Math.floor((e.clientY - r.top) / cs) - 1 };
+  if (!game.hex) return { x: Math.floor((e.clientX - r.left) / cs) - 1, y: Math.floor((e.clientY - r.top) / cs) - 1 };
+  // pixel -> axial (pointy-top hexes), then cube rounding
+  const px = e.clientX - r.left - hexO.x, py = e.clientY - r.top - hexO.y;
+  const q = (SQ3 / 3 * px - py / 3) / cs, rr = (2 / 3 * py) / cs, sx = -q - rr;
+  let rq = Math.round(q), rz = Math.round(rr), ry = Math.round(sx);
+  const dq = Math.abs(rq - q), dz = Math.abs(rz - rr), dy = Math.abs(ry - sx);
+  if (dq > dy && dq > dz) rq = -ry - rz; else if (dy <= dz) rz = -rq - ry;
+  return { x: rq, y: rz };
+}
+// Who would be deleting the blob of colour c (hex mode), or null if not allowed now.
+function deleter(c) {
+  const d = G.opp(c);
+  if (online) return me() === d && (!game.opts.enforce || game.turn === d) ? d : null;
+  return !game.opts.enforce || game.turn === d ? d : null;
 }
 
 function selectProblem(c) {
@@ -381,7 +399,12 @@ canvas.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   const { x, y } = cellAt(e);
   hover = { x, y };
-  if (mode !== 'play') {
+  if (mode === 'del') {
+    if (onBoard(x, y) && game.board[y][x]) dispatch({ type: 'delete', x, y });
+    else { message = 'Click a blob of your opponent\'s to delete it, or press the button again to cancel.'; showTurn = false; changed(); }
+    return;
+  }
+  if (placing()) {
     if (!onBoard(x, y) || spectating()) return;
     paintBoard = game.board.map(r => r.slice());
     paintChanges = new Map();
@@ -454,13 +477,16 @@ function setMode(m) {
 /* ---------- toolbar ---------- */
 $('addB').onclick = () => setMode('B');
 $('addR').onclick = () => setMode('R');
+$('delBtn').onclick = () => setMode('del');
 $('undo').onclick = () => dispatch({ type: 'undo' });
 $('switchTurn').onclick = () => dispatch({ type: 'switchTurn' });
 $('resetScores').onclick = () => dispatch({ type: 'resetScores' });
 $('clear').onclick = () => dispatch({ type: 'clear' });
-const applySize = () => dispatch({ type: 'resize', w: Math.round(+$('bw').value) || game.W, h: Math.round(+$('bh').value) || game.H });
+const applySize = () => dispatch(game.hex
+  ? { type: 'resize', side: Math.round(+$('hs').value) || game.hex.side, length: Math.round(+$('hl').value) || game.hex.length }
+  : { type: 'resize', w: Math.round(+$('bw').value) || game.W, h: Math.round(+$('bh').value) || game.H });
 $('applySize').onclick = applySize;
-for (const id of ['bw', 'bh']) $(id).addEventListener('keydown', e => { if (e.key === 'Enter') applySize(); });
+for (const id of ['bw', 'bh', 'hs', 'hl']) $(id).addEventListener('keydown', e => { if (e.key === 'Enter') applySize(); });
 $('enforce').onchange = e => { sel = null; dispatch({ type: 'options', enforce: e.target.checked }); };
 $('order').onchange = e => dispatch({ type: 'options', order: e.target.value });
 $('gmode').onchange = e => { sel = null; dispatch({ type: 'options', mode: e.target.value }); };
@@ -536,20 +562,48 @@ function resize() {
   if ($('gameView').hidden) return;
   const W = game.W, H = game.H;
   const avail = document.querySelector('.board-wrap').clientWidth - 22;
-  const byW = Math.floor(avail / (W + 2));
-  const byH = Math.floor(Math.max(300, window.innerHeight - 140) / (H + 2));
-  cs = Math.max(12, Math.min(44, byW, byH));
+  const availH = Math.max(300, window.innerHeight - 140);
+  if (game.hex) {
+    // cs = hex radius. Middle row has length+side-1 hexes; one ring of edge hexes all round.
+    const { side: S, length: L } = game.hex;
+    const unitsW = (L + S - 1 + 2) * SQ3 + 0.6, unitsH = (2 * S - 1 + 2) * 1.5 + 0.5 + 0.6;
+    cs = Math.max(8, Math.min(40, Math.floor(Math.min(avail / unitsW, availH / unitsH))));
+    canvasPxW = Math.ceil(unitsW * cs); canvasPxH = Math.ceil(unitsH * cs);
+    // leftmost centre (middle row, q + r/2 = (S-1)/2) sits one hex width in from the left margin
+    hexO = { x: 0.3 * cs + SQ3 * cs * 1.5 - SQ3 * cs * (S - 1) / 2, y: 0.3 * cs + cs + 1.5 * cs };
+  } else {
+    cs = Math.max(12, Math.min(44, Math.floor(avail / (W + 2)), Math.floor(availH / (H + 2))));
+    canvasPxW = (W + 2) * cs; canvasPxH = (H + 2) * cs;
+  }
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = (W + 2) * cs * dpr; canvas.height = (H + 2) * cs * dpr;
-  canvas.style.width = (W + 2) * cs + 'px'; canvas.style.height = (H + 2) * cs + 'px';
+  canvas.width = canvasPxW * dpr; canvas.height = canvasPxH * dpr;
+  canvas.style.width = canvasPxW + 'px'; canvas.style.height = canvasPxH + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  canvasW = W; canvasH = H;
+  canvasKey = shapeKey();
   render();
 }
 window.addEventListener('resize', resize);
 
-const PX = x => (x + 1.5) * cs;
-function cellRect(x, y, fill) { ctx.fillStyle = fill; ctx.fillRect((x + 1) * cs, (y + 1) * cs, cs, cs); }
+// Pixel centre of cell (x, y): squares, or pointy-top hexes in axial coordinates.
+function C(x, y) { return game.hex ? [hexO.x + cs * SQ3 * (x + y / 2), hexO.y + cs * 1.5 * y] : [(x + 1.5) * cs, (y + 1.5) * cs]; }
+function hexPath(x, y, r = cs) {
+  const [px, py] = C(x, y);
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) { const a = Math.PI / 180 * (60 * i - 30); ctx[i ? 'lineTo' : 'moveTo'](px + r * Math.cos(a), py + r * Math.sin(a)); }
+  ctx.closePath();
+}
+// The edge of hex (x, y) facing neighbour direction d.
+const HEX_ANG = { '1,0': 0, '0,1': 60, '-1,1': 120, '-1,0': 180, '0,-1': 240, '1,-1': 300 };
+function hexEdge(x, y, d) {
+  const [px, py] = C(x, y), t = HEX_ANG[d.join(',')];
+  const v = deg => [px + cs * Math.cos(deg * Math.PI / 180), py + cs * Math.sin(deg * Math.PI / 180)];
+  const [a, b] = [v(t - 30), v(t + 30)];
+  ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+}
+function cellRect(x, y, fill) {
+  ctx.fillStyle = fill;
+  if (game.hex) { hexPath(x, y); ctx.fill(); } else ctx.fillRect((x + 1) * cs, (y + 1) * cs, cs, cs);
+}
 function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
 function cross(px, py, s, color, alpha = 1) {
   ctx.save(); ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineCap = 'round';
@@ -558,7 +612,7 @@ function cross(px, py, s, color, alpha = 1) {
   ctx.restore();
 }
 function marker(x, y, o, color) {
-  const px = PX(x), py = PX(y);
+  const [px, py] = C(x, y);
   switch (o) {
     case 'empty': ctx.fillStyle = `rgba(${RGB[color]},.75)`; circle(px, py, cs * 0.15); ctx.fill(); break;
     case 'win': ctx.strokeStyle = COL.win; ctx.lineWidth = Math.max(2.5, cs * 0.13); circle(px, py, cs * 0.44); ctx.stroke(); break;
@@ -569,7 +623,7 @@ function marker(x, y, o, color) {
   }
 }
 function drawStone(x, y, c, alpha = 1, carrying = false) {
-  const px = PX(x), py = PX(y);
+  const [px, py] = C(x, y);
   ctx.save(); ctx.globalAlpha = alpha;
   circle(px, py, cs * 0.38); ctx.fillStyle = carrying ? COL[c + 'l'] : COL[c]; ctx.fill();
   ctx.lineWidth = Math.max(1, cs * 0.06); ctx.strokeStyle = COL[c + 'd']; ctx.stroke();
@@ -582,7 +636,7 @@ function drawStone(x, y, c, alpha = 1, carrying = false) {
   ctx.restore();
 }
 function diamond(x, y, r, fill, stroke) {
-  const px = PX(x), py = PX(y);
+  const [px, py] = C(x, y);
   ctx.beginPath(); ctx.moveTo(px, py - r); ctx.lineTo(px + r, py); ctx.lineTo(px, py + r); ctx.lineTo(px - r, py); ctx.closePath();
   if (fill) { ctx.fillStyle = fill; ctx.fill(); }
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = Math.max(2, cs * 0.1); ctx.stroke(); }
@@ -591,9 +645,9 @@ function diamond(x, y, r, fill, stroke) {
 function pointsMarker(m, plainDot) {
   if (m.deliver) {
     ctx.fillStyle = COL[m.c + 'd']; ctx.font = `800 ${Math.round(cs * 0.5)}px system-ui, sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('+1', PX(m.tx), PX(m.ty) + 1);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; { const [px, py] = C(m.tx, m.ty); ctx.fillText('+1', px, py + 1); }
   } else if (m.pick) diamond(m.tx, m.ty, cs * 0.3, null, COL[m.c + 'd']);
-  else if (plainDot) { ctx.fillStyle = `rgba(${RGB[m.c]},.75)`; circle(PX(m.tx), PX(m.ty), cs * 0.15); ctx.fill(); }
+  else if (plainDot) { ctx.fillStyle = `rgba(${RGB[m.c]},.75)`; circle(...C(m.tx, m.ty), cs * 0.15); ctx.fill(); }
 }
 function setPreview(text, bad) {
   const el = $('preview');
@@ -601,14 +655,50 @@ function setPreview(text, bad) {
   el.classList.toggle('bad', !!bad);
 }
 
-function render() {
-  if ($('gameView').hidden || canvasW !== game.W || canvasH !== game.H) return;
+// Hex board: a ring of edge hexes (grey = wall, blue/red = that side scores there), then the cells.
+function drawHexBackground() {
   const W = game.W, H = game.H;
-  const cw = (W + 2) * cs, ch = (H + 2) * cs, b = paintBoard || game.board;
+  ctx.fillStyle = '#fffdf8'; ctx.fillRect(0, 0, canvasPxW, canvasPxH);
+  const ring = new Map();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!onBoard(x, y)) continue;
+    for (const [dx, dy] of G.HEX_DIRS) {
+      const nx = x + dx, ny = y + dy, k = nx + ',' + ny;
+      if (onBoard(nx, ny) || ring.has(k)) continue;
+      ring.set(k, [nx, ny, ny < 0 || ny >= H ? 'wall' : nx > G.hexRowEnd(game, ny) ? 'B' : 'R']);
+    }
+  }
+  ctx.font = `700 ${Math.max(9, Math.round(cs * 0.75))}px system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const [x, y, kind] of ring.values()) {
+    hexPath(x, y);
+    ctx.fillStyle = kind === 'wall' ? COL.side : kind === 'B' ? COL.blueGoal : COL.redGoal; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.07)'; ctx.lineWidth = 1; ctx.stroke();
+    if (kind !== 'wall') { const [px, py] = C(x, y); ctx.globalAlpha = .45; ctx.fillStyle = kind === 'B' ? COL.Bd : COL.Rd; ctx.fillText(kind === 'B' ? '→' : '←', px, py + 1); ctx.globalAlpha = 1; }
+  }
+  const shades = [COL.cellA, COL.cellB, '#f4eee2'];
+  ctx.lineWidth = 1; ctx.strokeStyle = COL.grid;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!onBoard(x, y)) continue;
+    hexPath(x, y); ctx.fillStyle = shades[((x - y) % 3 + 3) % 3]; ctx.fill(); ctx.stroke();
+  }
+  ctx.strokeStyle = '#8f8672'; ctx.lineWidth = 2; ctx.beginPath();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!onBoard(x, y)) continue;
+    for (const d of G.HEX_DIRS) if (!onBoard(x + d[0], y + d[1])) hexEdge(x, y, d);
+  }
+  ctx.stroke();
+}
+
+function render() {
+  if ($('gameView').hidden || canvasKey !== shapeKey()) return;
+  const W = game.W, H = game.H;
+  const cw = canvasPxW, ch = canvasPxH, b = paintBoard || game.board;
   ctx.clearRect(0, 0, cw, ch);
+  const pm = G.isPoints(game);
+  if (game.hex) drawHexBackground(); else {
 
   // walls
-  const pm = G.isPoints(game);
   ctx.fillStyle = COL.side; ctx.fillRect(0, 0, cw, ch);
   ctx.font = `700 ${Math.max(9, Math.round(cs * 0.45))}px system-ui, sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -658,6 +748,8 @@ function render() {
     }
   }
 
+  } // end square background
+
   // last move
   const lm = game.lastMove;
   if (lm && !paintBoard) {
@@ -672,27 +764,46 @@ function render() {
     ctx.fillStyle = `rgba(${RGB[bl.color]},.16)`;
     for (const [dx, dy] of G.legalOffsets(game, info, bl)) {
       const x = grip.x + dx, y = grip.y + dy;
-      if (inView(x, y)) ctx.fillRect((x + 1) * cs, (y + 1) * cs, cs, cs);
+      if (inView(x, y)) cellRect(x, y, `rgba(${RGB[bl.color]},.16)`);
     }
   }
 
   // blob connectors, then stones
-  const th = cs * 0.34;
+  ctx.save(); ctx.lineCap = 'butt'; ctx.lineWidth = cs * 0.34;
+  const linkDirs = game.hex ? [[1, 0], [0, 1], [-1, 1]] : [[1, 0], [0, 1]];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const c = b[y][x]; if (!c) continue;
-    ctx.fillStyle = COL[c + 'd'];
-    if (x + 1 < W && b[y][x + 1] === c) ctx.fillRect(PX(x), PX(y) - th / 2, cs, th);
-    if (y + 1 < H && b[y + 1][x] === c) ctx.fillRect(PX(x) - th / 2, PX(y), th, cs);
+    ctx.strokeStyle = COL[c + 'd'];
+    for (const [dx, dy] of linkDirs) {
+      const nx = x + dx, ny = y + dy;
+      if (ny < H && nx >= 0 && nx < W && b[ny][nx] === c) { ctx.beginPath(); ctx.moveTo(...C(x, y)); ctx.lineTo(...C(nx, ny)); ctx.stroke(); }
+    }
   }
+  ctx.restore();
   const carrying = pm ? G.carrySet(game) : null;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b[y][x]) drawStone(x, y, b[y][x], 1, !!carrying && carrying.has(x + ',' + y));
 
   setPreview('');
 
+  // delete mode (hex): highlight the whole blob under the pointer
+  if (mode === 'del') {
+    if (hover && onBoard(hover.x, hover.y) && b[hover.y][hover.x]) {
+      const hb = blobAt(hover.x, hover.y), who = deleter(hb.color);
+      if (who && game.deletes[who] > 0) {
+        for (const [x, y] of hb.cells) { cellRect(x, y, 'rgba(107,42,36,.38)'); cross(...C(x, y), cs * 0.22, '#fff', .95); }
+        const n = game.deletes[who];
+        setPreview(`Delete this ${hb.size}-stone ${NAME[hb.color].toLowerCase()} blob — uses one of ${NAME[who]}'s moves (${n} delete${n === 1 ? '' : 's'} left).`);
+      } else {
+        setPreview(who ? `${NAME[who]} has no deletes left.` : online && me() === hb.color ? 'You can only delete your opponent\'s blobs.' : `It's ${NAME[game.turn]}'s turn — only ${NAME[G.opp(game.turn)].toLowerCase()} blobs can be deleted now.`, true);
+      }
+    }
+    return;
+  }
+
   // placement preview
-  if (mode !== 'play') {
+  if (placing()) {
     if (hover && onBoard(hover.x, hover.y) && !spectating()) {
-      if (b[hover.y][hover.x] === mode) cross(PX(hover.x), PX(hover.y), cs * 0.2, '#fff', .9);
+      if (b[hover.y][hover.x] === mode) cross(...C(hover.x, hover.y), cs * 0.2, '#fff', .9);
       else drawStone(hover.x, hover.y, mode, .45);
     }
     return;
@@ -700,16 +811,16 @@ function render() {
 
   // hover ring on stones
   if (hover && !drag && onBoard(hover.x, hover.y) && b[hover.y][hover.x] && !(sel && sel.x === hover.x && sel.y === hover.y)) {
-    ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 2; circle(PX(hover.x), PX(hover.y), cs * 0.46); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 2; circle(...C(hover.x, hover.y), cs * 0.46); ctx.stroke();
   }
   if (!sel) return;
   const c = b[sel.y][sel.x];
 
   if (sel.level === 1) {
-    ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(PX(sel.x), PX(sel.y), cs * 0.47); ctx.stroke();
+    ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(...C(sel.x, sel.y), cs * 0.47); ctx.stroke();
     for (const t of G.kingTargets(game, info, sel.x, sel.y)) {
-      if (t.o === 'self' || t.o === 'blocked') { if (inView(t.tx, t.ty)) cross(PX(t.tx), PX(t.ty), cs * 0.14, COL.x, .25); continue; }
-      if (t.o === 'forbidden') { cross(PX(t.tx), PX(t.ty), cs * 0.18, COL.x, .7); continue; }
+      if (t.o === 'self' || t.o === 'blocked') { if (inView(t.tx, t.ty)) cross(...C(t.tx, t.ty), cs * 0.14, COL.x, .25); continue; }
+      if (t.o === 'forbidden') { cross(...C(t.tx, t.ty), cs * 0.18, COL.x, .7); continue; }
       if (hover && hover.x === t.tx && hover.y === t.ty) cellRect(t.tx, t.ty, `rgba(${RGB[c]},.22)`);
       if (pm) pointsMarker(t, true); else marker(t.tx, t.ty, t.o, c);
     }
@@ -722,6 +833,7 @@ function render() {
   ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; ctx.lineCap = 'round';
   ctx.beginPath();
   for (const [x, y] of bl.cells) {
+    if (game.hex) { for (const d of G.HEX_DIRS) if (!inBlob(x + d[0], y + d[1])) hexEdge(x, y, d); continue; }
     const X = (x + 1) * cs, Y = (y + 1) * cs;
     if (!inBlob(x, y - 1)) { ctx.moveTo(X, Y); ctx.lineTo(X + cs, Y); }
     if (!inBlob(x, y + 1)) { ctx.moveTo(X, Y + cs); ctx.lineTo(X + cs, Y + cs); }
@@ -729,10 +841,10 @@ function render() {
     if (!inBlob(x + 1, y)) { ctx.moveTo(X + cs, Y); ctx.lineTo(X + cs, Y + cs); }
   }
   ctx.stroke(); ctx.restore();
-  ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(PX(grip.x), PX(grip.y), cs * 0.47); ctx.stroke();
+  ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(...C(grip.x, grip.y), cs * 0.47); ctx.stroke();
   if (pm) {
     ctx.save(); ctx.setLineDash([4, 3]); ctx.lineWidth = 2.5; ctx.strokeStyle = COL.sel;
-    for (const [x, y] of G.clusterOf(info, bl).cells) if (!inBlob(x, y)) { circle(PX(x), PX(y), cs * 0.47); ctx.stroke(); }
+    for (const [x, y] of G.clusterOf(info, bl).cells) if (!inBlob(x, y)) { circle(...C(x, y), cs * 0.47); ctx.stroke(); }
     ctx.restore();
   }
 
@@ -751,12 +863,12 @@ function render() {
   if (valid) {
     for (const m of moves) if (inView(m.tx, m.ty)) { if (pm) pointsMarker(m, false); else if (m.o !== 'empty') marker(m.tx, m.ty, m.o, m.c); }
     const parts = [...(plan.dragged ? [`dragging ${plan.dragged} stuck stone${plan.dragged > 1 ? 's' : ''}`] : []), ...G.summarize(moves, bl.color)];
-    setPreview(`Move ${G.offsetText(off.dx, off.dy)}${parts.length ? ' — ' + parts.join(', ') : ''}.${kbd ? ' Press Enter to confirm.' : ''}`);
+    setPreview(`Move ${G.offsetText(off.dx, off.dy, game)}${parts.length ? ' — ' + parts.join(', ') : ''}.${kbd ? ' Press Enter to confirm.' : ''}`);
   } else if (plan.reason === G.BLOCKED_BLOB || plan.reason === G.BLOCKED_BLOB_H) {
-    for (const m of moves) if (m.o === 'blocked' && inView(m.tx, m.ty)) cross(PX(m.tx), PX(m.ty), cs * 0.2, COL.x, .7);
+    for (const m of moves) if (m.o === 'blocked' && inView(m.tx, m.ty)) cross(...C(m.tx, m.ty), cs * 0.2, COL.x, .7);
     setPreview('Blocked — something would run into a wall or another stone.', true);
   } else if (plan.reason === G.GIFT_BLOB) {
-    for (const m of moves) if (m.gift) cross(PX(m.tx), PX(m.ty), cs * 0.22, COL.x, .8);
+    for (const m of moves) if (m.gift) cross(...C(m.tx, m.ty), cs * 0.22, COL.x, .8);
     setPreview('Illegal — a stone would land on one of its opponent\'s points.', true);
   } else {
     setPreview('Not reachable — the new position must overlap or edge-touch the old one.', true);
@@ -778,7 +890,12 @@ function updateUI() {
   $('carryB').textContent = game.carry.filter(([x, y]) => b[y] && b[y][x] === 'B').length;
   document.body.dataset.mode = game.opts.mode;
   $('gmode').value = game.opts.mode;
-  $('modeTag').textContent = game.opts.mode === 'hybrid' ? 'Hybrid mode' : 'Points mode';
+  $('modeTag').textContent = { hybrid: 'Hybrid mode', hex: 'Hexagonal mode' }[game.opts.mode] || 'Points mode';
+  $('delB').textContent = game.deletes.B; $('delR').textContent = game.deletes.R;
+  if (game.hex) {
+    if (document.activeElement !== $('hs')) $('hs').value = game.hex.side;
+    if (document.activeElement !== $('hl')) $('hl').value = game.hex.length;
+  }
   const seats = online && online.room ? online.room.seats : null;
   $('nameR').textContent = seats && seats.R ? seats.R.name : 'Red';
   $('nameB').textContent = seats && seats.B ? seats.B.name : 'Blue';
@@ -791,7 +908,12 @@ function updateUI() {
   $('addB').classList.toggle('active', mode === 'B');
   $('addR').classList.toggle('active', mode === 'R');
   const locked = spectating();
-  for (const id of ['addB', 'addR', 'switchTurn', 'resetScores', 'clear', 'applySize', 'bw', 'bh', 'pastePos', 'load', 'codeLoad', 'enforce', 'order', 'singleSize', 'gmode']) $(id).disabled = locked;
+  for (const id of ['addB', 'addR', 'switchTurn', 'resetScores', 'clear', 'applySize', 'bw', 'bh', 'pastePos', 'load', 'codeLoad', 'enforce', 'order', 'singleSize', 'gmode', 'hs', 'hl']) $(id).disabled = locked;
+  if (!game.hex && mode === 'del') mode = 'play';
+  const dWho = online ? me() : game.turn, dLeft = dWho ? game.deletes[dWho] : 0;
+  $('delBtn').textContent = mode === 'del' ? 'Cancel delete' : `Delete a${dWho ? ' ' + NAME[G.opp(dWho)].toLowerCase() : ''} blob (${dLeft} left)`;
+  $('delBtn').classList.toggle('active', mode === 'del');
+  $('delBtn').disabled = locked || (dLeft <= 0 && mode !== 'del');
   $('undo').disabled = locked || !game.history.length;
   if (locked && mode !== 'play') mode = 'play';
 
@@ -802,9 +924,12 @@ function updateUI() {
   if (document.activeElement !== $('bh')) $('bh').value = game.H;
 
   let s;
-  if (mode !== 'play') {
+  if (placing()) {
     const n = NAME[mode].toLowerCase();
-    s = `<b>Placing ${n} stones.</b> Click or drag across squares to add them; click a ${n} stone to remove it. Press the button again (or Esc) when you're done.`;
+    s = `<b>Placing ${n} stones.</b> Click or drag across ${game.hex ? 'hexes' : 'squares'} to add them; click a ${n} stone to remove it. Press the button again (or Esc) when you're done.`;
+  } else if (mode === 'del') {
+    const who = online ? me() : game.turn;
+    s = message ? message : `<b>Delete mode.</b> Click a ${NAME[G.opp(who)].toLowerCase()} blob to delete all of it — this uses one of ${online ? 'your' : NAME[who] + '\'s'} moves (${game.deletes[who]} delete${game.deletes[who] === 1 ? '' : 's'} left). Press the button again or Esc to cancel.`;
   } else if (message) {
     s = message + (showTurn ? ` ${turnText()}.` : '');
   } else if (spectating()) {
@@ -846,12 +971,12 @@ function changed() {
   if (sel && !(onBoard(sel.x, sel.y) && game.board[sel.y][sel.x])) sel = null;
   if (sel && online && game.board[sel.y][sel.x] !== me()) sel = null;
   if (!sel || sel.level !== 2) { kbd = null; drag = null; }
-  if (!$('gameView').hidden && (game.W !== canvasW || game.H !== canvasH)) resize();
+  if (!$('gameView').hidden && canvasKey !== shapeKey()) resize();
   updateUI(); renderLog(); render();
 }
 
 // Read-only handle for debugging in the browser console: __rvb.game, __rvb.cs
-window.__rvb = { get game() { return game; }, get cs() { return cs; } };
+window.__rvb = { get game() { return game; }, get cs() { return cs; }, center: (x, y) => C(x, y) };
 
 /* ---------- start ---------- */
 const params = new URLSearchParams(location.search);
