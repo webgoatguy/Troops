@@ -605,6 +605,8 @@ function cellRect(x, y, fill) {
   if (game.hex) { hexPath(x, y); ctx.fill(); } else ctx.fillRect((x + 1) * cs, (y + 1) * cs, cs, cs);
 }
 function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+// Ring around one cell: a circle round a stone, or an inset hex outline on a hex tile.
+function ring(x, y, r) { if (game.hex) hexPath(x, y, cs * (r >= 0.47 ? 0.8 : 0.86)); else circle(...C(x, y), cs * r); }
 function cross(px, py, s, color, alpha = 1) {
   ctx.save(); ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineCap = 'round';
   ctx.lineWidth = Math.max(2, cs * 0.12);
@@ -623,6 +625,13 @@ function marker(x, y, o, color) {
   }
 }
 function drawStone(x, y, c, alpha = 1, carrying = false) {
+  if (game.hex) {                                   // hex mode: the stone fills its whole hex
+    ctx.save(); ctx.globalAlpha = alpha;
+    hexPath(x, y, cs + 0.5); ctx.fillStyle = COL[c]; ctx.fill();
+    hexPath(x, y, cs); ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
+    return;
+  }
   const [px, py] = C(x, y);
   ctx.save(); ctx.globalAlpha = alpha;
   circle(px, py, cs * 0.38); ctx.fillStyle = carrying ? COL[c + 'l'] : COL[c]; ctx.fill();
@@ -770,7 +779,7 @@ function render() {
 
   // blob connectors, then stones
   ctx.save(); ctx.lineCap = 'butt'; ctx.lineWidth = cs * 0.34;
-  const linkDirs = game.hex ? [[1, 0], [0, 1], [-1, 1]] : [[1, 0], [0, 1]];
+  const linkDirs = game.hex ? [] : [[1, 0], [0, 1]];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const c = b[y][x]; if (!c) continue;
     ctx.strokeStyle = COL[c + 'd'];
@@ -782,6 +791,24 @@ function render() {
   ctx.restore();
   const carrying = pm ? G.carrySet(game) : null;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b[y][x]) drawStone(x, y, b[y][x], 1, !!carrying && carrying.has(x + ',' + y));
+  if (game.hex) {
+    // outline each blob: a dark edge wherever a tile's neighbour isn't the same colour
+    ctx.save(); ctx.lineWidth = Math.max(1.5, cs * 0.09); ctx.lineCap = 'round';
+    for (const c of ['B', 'R']) {
+      ctx.strokeStyle = COL[c + 'd']; ctx.beginPath();
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        if (b[y][x] !== c) continue;
+        for (const d of G.HEX_DIRS) { const nx = x + d[0], ny = y + d[1]; if (!(onBoard(nx, ny) && b[ny][nx] === c)) hexEdge(x, y, d); }
+      }
+      ctx.stroke();
+    }
+    // last move, drawn over the tiles: gold inset outline where stones landed
+    if (lm && !paintBoard) {
+      ctx.strokeStyle = COL.sel; ctx.lineWidth = Math.max(2, cs * 0.1);
+      for (const [x, y] of lm.to) if (onBoard(x, y) && b[y][x]) { hexPath(x, y, cs * 0.62); ctx.stroke(); }
+    }
+    ctx.restore();
+  }
 
   setPreview('');
 
@@ -811,13 +838,13 @@ function render() {
 
   // hover ring on stones
   if (hover && !drag && onBoard(hover.x, hover.y) && b[hover.y][hover.x] && !(sel && sel.x === hover.x && sel.y === hover.y)) {
-    ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 2; circle(...C(hover.x, hover.y), cs * 0.46); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 2; ring(hover.x, hover.y, 0.46); ctx.stroke();
   }
   if (!sel) return;
   const c = b[sel.y][sel.x];
 
   if (sel.level === 1) {
-    ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(...C(sel.x, sel.y), cs * 0.47); ctx.stroke();
+    ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; ring(sel.x, sel.y, 0.47); ctx.stroke();
     for (const t of G.kingTargets(game, info, sel.x, sel.y)) {
       if (t.o === 'self' || t.o === 'blocked') { if (inView(t.tx, t.ty)) cross(...C(t.tx, t.ty), cs * 0.14, COL.x, .25); continue; }
       if (t.o === 'forbidden') { cross(...C(t.tx, t.ty), cs * 0.18, COL.x, .7); continue; }
@@ -841,7 +868,7 @@ function render() {
     if (!inBlob(x + 1, y)) { ctx.moveTo(X + cs, Y); ctx.lineTo(X + cs, Y + cs); }
   }
   ctx.stroke(); ctx.restore();
-  ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; circle(...C(grip.x, grip.y), cs * 0.47); ctx.stroke();
+  ctx.strokeStyle = COL.sel; ctx.lineWidth = 3; ring(grip.x, grip.y, 0.47); ctx.stroke();
   if (pm) {
     ctx.save(); ctx.setLineDash([4, 3]); ctx.lineWidth = 2.5; ctx.strokeStyle = COL.sel;
     for (const [x, y] of G.clusterOf(info, bl).cells) if (!inBlob(x, y)) { circle(...C(x, y), cs * 0.47); ctx.stroke(); }
