@@ -16,7 +16,9 @@
 //               sideways: Blue scores off the two right-hand edges, Red off the two left-hand
 //               edges; top/bottom edges and your own back edges block. Each player also has
 //               3 deletes: instead of a move, remove one whole opponent blob.
-//   'struct'  — Hexagonal without deletes, plus two special shapes (any rotation):
+//   'struct'  — Hexagonal board without deletes, but played top-to-bottom like Classic: Blue scores
+//               off the flat top edge, Red off the flat bottom edge; the four slanted edges and your
+//               own back edge block. Plus two special shapes (any rotation):
 //               TRIANGLE  — a blob of exactly 3 mutually touching stones. After every move,
 //                           every opponent stone touching a triangle is removed (all at once,
 //                           so touching triangles hurt each other; repeats until nothing changes).
@@ -46,6 +48,8 @@ export const BLOCKED_BLOB = 'That would push the blob (or something stuck to it)
 export const GIFT_BLOB = 'Illegal — that would put a stone onto one of its opponent\'s points.';
 export const BLOCKED_KING_H = 'In Hybrid mode stones can\'t move into other stones, the side walls or their own back wall.';
 export const BLOCKED_KING_X = 'In Hexagonal mode stones can\'t move into other stones, the top/bottom walls or their own back edges.';
+export const BLOCKED_KING_S = 'In Structures mode stones can\'t move into other stones, the slanted side walls or their own back edge.';
+export const BLOCKED_BLOB_S = 'That would push the blob into another stone, a slanted side wall or its own back edge.';
 export const BLOCKED_BLOB_X = 'That would push the blob into another stone, the top/bottom wall or its own back edges.';
 export const FORBIDDEN_KING = 'Illegal — a stone can\'t move onto its opponent\'s points.';
 
@@ -195,6 +199,10 @@ function pointsOutcome(g, tx, ty, vacated) {
    'score' when leaving through your far wall (straight through it, not a corner),
    'empty' for a free square, otherwise 'blocked'. */
 function hybridOutcome(g, color, tx, ty, vacated) {
+  if (g.hex && !onBoard(g, tx, ty) && isStruct(g)) {
+    // Structures: Blue leaves through the flat top edge, Red through the flat bottom; sideways = wall
+    return (color === 'B' && ty < 0) || (color === 'R' && ty >= g.H) ? 'score' : 'blocked';
+  }
   if (g.hex && !onBoard(g, tx, ty)) {
     // leaving up/down hits the top/bottom wall; leaving sideways crosses a left/right edge
     if (ty < 0 || ty >= g.H) return 'blocked';
@@ -327,7 +335,7 @@ export function blobPlan(g, info, bl, dx, dy) {
     }
     const moves = bl.cells.map(([x, y]) => ({ fx: x, fy: y, tx: x + dx, ty: y + dy, c: bl.color, o: hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) }));
     const blocked = moves.some(m => m.o === 'blocked');
-    return { valid: shapeOk && !blocked, reason: !shapeOk ? CANT : blocked ? (g.hex ? BLOCKED_BLOB_X : BLOCKED_BLOB_H) : '', moves, dragged: 0 };
+    return { valid: shapeOk && !blocked, reason: !shapeOk ? CANT : blocked ? (isStruct(g) ? BLOCKED_BLOB_S : g.hex ? BLOCKED_BLOB_X : BLOCKED_BLOB_H) : '', moves, dragged: 0 };
   }
   if (!isPoints(g)) {
     return { valid: shapeOk, reason: shapeOk ? '' : CANT, moves: blobMoves(g, info, bl, dx, dy), dragged: 0 };
@@ -639,7 +647,7 @@ export function applyAction(g, a, actor = {}) {
       const info = computeBlobs(g);
       if (hybridLike(g)) {
         const m = kingTargets(g, info, fx, fy).find(t => t.tx === tx && t.ty === ty);
-        if (m.o === 'blocked') return fail(g.hex ? BLOCKED_KING_X : BLOCKED_KING_H);
+        if (m.o === 'blocked') return fail(isStruct(g) ? BLOCKED_KING_S : g.hex ? BLOCKED_KING_X : BLOCKED_KING_H);
         pushHistory(g);
         return done(executeHybrid(g, [m], color, label), true);
       }
@@ -829,7 +837,7 @@ export function applyAction(g, a, actor = {}) {
         said.push({ classic: 'game mode Classic', points: 'game mode Points (collect points and bring them home)',
           hybrid: 'game mode Hybrid (classic scoring, but stones never die or collide)',
           hex: 'game mode Hexagonal (Hybrid rules on a hex board, 3 deletes each)',
-          struct: 'game mode Structures (hex board with triangles and snowflakes)' }[a.mode]);
+          struct: 'game mode Structures (hex board played top-to-bottom, with triangles and snowflakes)' }[a.mode]);
       }
       if (typeof a.enforce === 'boolean' && a.enforce !== g.opts.enforce) {
         g.opts.enforce = a.enforce; said.push(`turns ${a.enforce ? 'enforced' : 'not enforced'}`);

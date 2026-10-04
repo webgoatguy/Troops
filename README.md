@@ -111,8 +111,13 @@ and switching it puts every point back.
     deletes back.
   - Switching to or from Hexagonal starts a fresh board (Undo brings the old one back).
 
-- **Structures**: the Hexagonal board and rules, without deletes, plus two special
-  shapes. Either orientation of each shape counts.
+- **Structures**: the wide hex board, played top-to-bottom like Classic, with no
+  deletes and two special shapes.
+  - Blue scores off the flat top edge and Red off the flat bottom edge. Stones that
+    cross score; the rest of a blob stays.
+  - The four slanted edges are walls, and so is your own back edge. Stones never die
+    and can't move into other stones.
+  - Either orientation of each shape counts.
   - **Triangle**: a blob of exactly 3 stones that all touch each other.
     - After every move, every opponent stone touching a triangle is removed.
     - All removals happen at once, so two triangles that touch each lose the touching

@@ -350,7 +350,7 @@ function playClick(x, y, shift) {
     const noDeath = G.isPoints(game) || G.hybridLike(game);
     if (t && (noDeath ? t.o === 'empty' || t.o === 'score' : (t.o !== 'self' || shift))) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
     if (t && noDeath && !(onBoard(x, y) && b[y][x])) {
-      message = t.o === 'forbidden' ? G.FORBIDDEN_KING : game.hex ? G.BLOCKED_KING_X : G.hybridLike(game) ? G.BLOCKED_KING_H : G.BLOCKED_KING;
+      message = t.o === 'forbidden' ? G.FORBIDDEN_KING : G.isStruct(game) ? G.BLOCKED_KING_S : game.hex ? G.BLOCKED_KING_X : G.hybridLike(game) ? G.BLOCKED_KING_H : G.BLOCKED_KING;
       showTurn = false; changed(); return;
     }
   }
@@ -653,7 +653,9 @@ function drawHexBackground() {
     for (const [dx, dy] of G.HEX_DIRS) {
       const nx = x + dx, ny = y + dy, k = nx + ',' + ny;
       if (onBoard(nx, ny) || ring.has(k)) continue;
-      ring.set(k, [nx, ny, ny < 0 || ny >= H ? 'wall' : nx > G.hexRowEnd(game, ny) ? 'B' : 'R']);
+      ring.set(k, [nx, ny, G.isStruct(game)
+        ? (ny < 0 ? 'B' : ny >= H ? 'R' : 'wall')                       // Structures: top/bottom edges score
+        : (ny < 0 || ny >= H ? 'wall' : nx > G.hexRowEnd(game, ny) ? 'B' : 'R')]);
     }
   }
   ctx.font = `700 ${Math.max(9, Math.round(cs * 0.75))}px system-ui, sans-serif`;
@@ -662,7 +664,7 @@ function drawHexBackground() {
     hexPath(x, y);
     ctx.fillStyle = kind === 'wall' ? COL.side : kind === 'B' ? COL.blueGoal : COL.redGoal; ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,.07)'; ctx.lineWidth = 1; ctx.stroke();
-    if (kind !== 'wall') { const [px, py] = C(x, y); ctx.globalAlpha = .45; ctx.fillStyle = kind === 'B' ? COL.Bd : COL.Rd; ctx.fillText(kind === 'B' ? '→' : '←', px, py + 1); ctx.globalAlpha = 1; }
+    if (kind !== 'wall') { const [px, py] = C(x, y); ctx.globalAlpha = .45; ctx.fillStyle = kind === 'B' ? COL.Bd : COL.Rd; ctx.fillText(G.isStruct(game) ? (kind === 'B' ? '↑' : '↓') : (kind === 'B' ? '→' : '←'), px, py + 1); ctx.globalAlpha = 1; }
   }
   const shades = [COL.cellA, COL.cellB, '#f4eee2'];
   ctx.lineWidth = 1; ctx.strokeStyle = COL.grid;
@@ -888,7 +890,7 @@ function render() {
     for (const m of moves) if (inView(m.tx, m.ty)) { if (pm) pointsMarker(m, false); else if (m.o !== 'empty') marker(m.tx, m.ty, m.o, m.c); }
     const parts = [...(plan.dragged ? [`dragging ${plan.dragged} stuck stone${plan.dragged > 1 ? 's' : ''}`] : []), ...G.summarize(moves, bl.color)];
     setPreview(`Move ${G.offsetText(off.dx, off.dy, game)}${parts.length ? ' — ' + parts.join(', ') : ''}.${kbd ? ' Press Enter to confirm.' : ''}`);
-  } else if (plan.reason === G.BLOCKED_BLOB || plan.reason === G.BLOCKED_BLOB_H) {
+  } else if ([G.BLOCKED_BLOB, G.BLOCKED_BLOB_H, G.BLOCKED_BLOB_X, G.BLOCKED_BLOB_S].includes(plan.reason)) {
     for (const m of moves) if (m.o === 'blocked' && inView(m.tx, m.ty)) cross(...C(m.tx, m.ty), cs * 0.2, COL.x, .7);
     setPreview('Blocked — something would run into a wall or another stone.', true);
   } else if (plan.frozen) {
