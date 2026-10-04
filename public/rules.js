@@ -16,6 +16,13 @@
 //               sideways: Blue scores off the two right-hand edges, Red off the two left-hand
 //               edges; top/bottom edges and your own back edges block. Each player also has
 //               3 deletes: instead of a move, remove one whole opponent blob.
+//   'struct'  — Hexagonal without deletes, plus two special shapes (any rotation):
+//               TRIANGLE  — a blob of exactly 3 mutually touching stones. After every move,
+//                           every opponent stone touching a triangle is removed (all at once,
+//                           so touching triangles hurt each other; repeats until nothing changes).
+//               SNOWFLAKE — a stone plus three same-colour neighbours at every other side
+//                           (can sit inside a bigger blob). Opponent blobs touching any of those
+//                           4 stones are frozen: they can't move as a blob while touching.
 
 export const MIN_W = 3, MAX_W = 120, MIN_H = 3, MAX_H = 80;
 export const HOME_ROWS = 5;
@@ -79,9 +86,12 @@ export function normalize(g) {
 export const onBoard = (g, x, y) => x >= 0 && x < g.W && y >= 0 && y < g.H && (!g.hex || (x >= hexRowStart(g, y) && x <= hexRowEnd(g, y)));
 export const isPoints = g => g.opts.mode === 'points';
 export const isHybrid = g => g.opts.mode === 'hybrid';
-export const isHex = g => g.opts.mode === 'hex';
+export const isStruct = g => g.opts.mode === 'struct';
+export const hexBoardMode = m => m === 'hex' || m === 'struct';
+export const isHex = g => hexBoardMode(g.opts.mode);       // played on the hex board
 export const hybridLike = g => isHybrid(g) || isHex(g);   // no deaths, no collisions, far-wall scoring
-export const MODES = ['classic', 'points', 'hybrid', 'hex'];
+export const MODES = ['classic', 'points', 'hybrid', 'hex', 'struct'];
+export const FROZEN = 'That blob is frozen — it touches a snowflake. Its stones can still move one at a time.';
 // Human-readable cell name: (column, row); in hex mode the column counts along that row.
 export const cellName = (g, x, y) => `(${g.hex ? x - hexRowStart(g, y) + 1 : x + 1}, ${y + 1})`;
 export const carrySet = g => new Set(g.carry.map(([x, y]) => key(x, y)));
@@ -224,6 +234,54 @@ export function kingTargets(g, info, x, y) {
   return pm ? annotatePoints(g, out) : out;
 }
 
+/* ---------- structures (Structures mode) ---------- */
+const SNOW_ARMS = [[[1, 0], [0, -1], [-1, 1]], [[-1, 0], [1, -1], [0, 1]]];   // the two snowflake orientations
+const hexTouch = ([ax, ay], [bx, by]) => HEX_DIRS.some(([dx, dy]) => ax + dx === bx && ay + dy === by);
+const sCache = new WeakMap();
+const NO_STRUCT = { tri: new Set(), snow: new Set(), frozen: new Set() };
+// { tri: Set of "x,y" triangle stones, snow: Set of snowflake stones, frozen: Set of frozen blob indices }
+export function structures(g, info) {
+  if (!isStruct(g)) return NO_STRUCT;
+  if (sCache.has(info)) return sCache.get(info);
+  const tri = new Set(), snow = new Set(), frozen = new Set();
+  for (const bl of info.blobs) {
+    const c = bl.cells;
+    if (bl.size === 3 && hexTouch(c[0], c[1]) && hexTouch(c[1], c[2]) && hexTouch(c[0], c[2])) for (const [x, y] of c) tri.add(key(x, y));
+  }
+  for (let y = 0; y < g.H; y++) for (let x = 0; x < g.W; x++) {
+    const col = g.board[y][x]; if (!col) continue;
+    for (const arms of SNOW_ARMS) {
+      if (arms.every(([dx, dy]) => onBoard(g, x + dx, y + dy) && g.board[y + dy][x + dx] === col)) {
+        snow.add(key(x, y)); for (const [dx, dy] of arms) snow.add(key(x + dx, y + dy));
+      }
+    }
+  }
+  for (const k of snow) {
+    const [x, y] = k.split(',').map(Number), col = g.board[y][x];
+    for (const [dx, dy] of HEX_DIRS) {
+      const nx = x + dx, ny = y + dy;
+      if (onBoard(g, nx, ny) && g.board[ny][nx] === opp(col)) frozen.add(info.id[ny][nx]);
+    }
+  }
+  const out = { tri, snow, frozen };
+  sCache.set(info, out);
+  return out;
+}
+// After a move: every opponent stone touching a triangle is removed, all at once; repeat until stable.
+function triangleSweep(g) {
+  const removed = { B: 0, R: 0 }, gone = [];
+  for (let round = 0; round < 100; round++) {
+    const st = structures(g, computeBlobs(g)), kill = new Set();
+    for (const k of st.tri) {
+      const [x, y] = k.split(',').map(Number), col = g.board[y][x];
+      for (const [dx, dy] of HEX_DIRS) if (onBoard(g, x + dx, y + dy) && g.board[y + dy][x + dx] === opp(col)) kill.add(key(x + dx, y + dy));
+    }
+    if (!kill.size) break;
+    for (const k of kill) { const [x, y] = k.split(',').map(Number); removed[g.board[y][x]]++; g.board[y][x] = null; gone.push(k); }
+  }
+  return { removed, gone };
+}
+
 /* ---------- blob translations ----------
    Offset (dx,dy) is legal when the moved blob overlaps its old cells
    (dx,dy = b - a) or edge-touches them (dx,dy = b - a ± unit step),
@@ -263,6 +321,10 @@ export function blobPlan(g, info, bl, dx, dy) {
   const T = blobTranslations(g, info, bl);
   const shapeOk = isValidT(T, dx, dy);
   if (hybridLike(g)) {
+    if (structures(g, info).frozen.has(bl.index)) {
+      return { valid: false, reason: FROZEN, frozen: true, dragged: 0,
+        moves: bl.cells.map(([x, y]) => ({ fx: x, fy: y, tx: x + dx, ty: y + dy, c: bl.color, o: hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) })) };
+    }
     const moves = bl.cells.map(([x, y]) => ({ fx: x, fy: y, tx: x + dx, ty: y + dy, c: bl.color, o: hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) }));
     const blocked = moves.some(m => m.o === 'blocked');
     return { valid: shapeOk && !blocked, reason: !shapeOk ? CANT : blocked ? (g.hex ? BLOCKED_BLOB_X : BLOCKED_BLOB_H) : '', moves, dragged: 0 };
@@ -289,6 +351,7 @@ export function blobPlan(g, info, bl, dx, dy) {
 export function legalOffsets(g, info, bl) {
   const T = blobTranslations(g, info, bl);
   if (hybridLike(g)) {
+    if (structures(g, info).frozen.has(bl.index)) return [];
     if (!T.legalHybrid) T.legalHybrid = T.list.filter(([dx, dy]) => bl.cells.every(([x, y]) => hybridOutcome(g, bl.color, x + dx, y + dy, T.vac) !== 'blocked'));
     return T.legalHybrid;
   }
@@ -380,7 +443,7 @@ export function encodePosition(g) {
       for (let x = hexRowStart(g, y); x <= hexRowEnd(g, y); x++) toks.push(g.board[y][x] ? g.board[y][x].toLowerCase() : '.');
       rows.push(rle(toks, true));
     }
-    return `RVB3;hex;${g.hex.side}x${g.hex.length};${g.turn}${g.left}/${g.per};R${g.scores.R}B${g.scores.B};D${g.deletes.B}.${g.deletes.R};${rows.join('/')}`;
+    return `RVB3;${isStruct(g) ? 'struct' : 'hex'};${g.hex.side}x${g.hex.length};${g.turn}${g.left}/${g.per};R${g.scores.R}B${g.scores.B};D${g.deletes.B}.${g.deletes.R};${rows.join('/')}`;
   }
   const pm = isPoints(g), cs = pm ? carrySet(g) : null;
   const rows = g.board.map((row, y) => rle(row.map((c, x) => (!c ? '.' : pm && cs.has(key(x, y)) ? c : c.toLowerCase())), true));
@@ -391,7 +454,7 @@ export function encodePosition(g) {
   return `RVB2;p;${head};${pts('B')};${pts('R')}`;
 }
 function decodeHex(t) {
-  const m = t.match(/^RVB3;hex;(\d+)x(\d+);([RB])(\d+)\/(\d+);R(\d+)B(\d+);D(\d+)\.(\d+);(.*)$/);
+  const m = t.match(/^RVB3;(?:hex|struct);(\d+)x(\d+);([RB])(\d+)\/(\d+);R(\d+)B(\d+);D(\d+)\.(\d+);(.*)$/);
   if (!m) return null;
   const side = +m[1], length = +m[2];
   if (side < HEX_MIN_S || side > HEX_MAX_S || length < HEX_MIN_L || length > HEX_MAX_L) return null;
@@ -407,7 +470,7 @@ function decodeHex(t) {
   }
   const per = Math.min(9, Math.max(1, +m[5])), left = Math.min(per, Math.max(1, +m[4]));
   const d = v => Math.min(DELETES, +v);
-  return { W, H, board, turn: m[3], per, left, scores: { R: +m[6], B: +m[7] }, mode: 'hex',
+  return { W, H, board, turn: m[3], per, left, scores: { R: +m[6], B: +m[7] }, mode: t.startsWith('RVB3;struct;') ? 'struct' : 'hex',
     hex: { side, length }, deletes: { B: d(m[8]), R: d(m[9]) }, pts: null, carry: [] };
 }
 export function decodePosition(text) {
@@ -471,9 +534,9 @@ function pushHistory(g) {
   g.history.push({ code: encodePosition(g), logLen: g.log.length, moveNo: g.moveNo, lastMove: g.lastMove });
   if (g.history.length > HISTORY_MAX) g.history.shift();
 }
-function finishMove(g, mover, moves, label, landed) {
+function finishMove(g, mover, moves, label, landed, extra = []) {
   advanceTurn(g, mover);
-  const parts = summarize(moves, mover);
+  const parts = [...summarize(moves, mover), ...extra];
   const text = label + (parts.length ? ' — ' + parts.join(', ') : '');
   g.moveNo++;
   addLog(g, { n: g.moveNo, c: mover, t: text });
@@ -506,6 +569,16 @@ function executeHybrid(g, moves, mover, label) {
     else { nb[m.ty][m.tx] = m.c; to.push([m.tx, m.ty]); }
   }
   g.board = nb;
+  const extra = [];
+  if (isStruct(g)) {
+    const { removed, gone } = triangleSweep(g);
+    const r = [];
+    if (removed.B) r.push(`${plural(removed.B, 'blue stone')}`);
+    if (removed.R) r.push(`${plural(removed.R, 'red stone')}`);
+    if (r.length) extra.push(`triangles removed ${r.join(' and ')}`);
+    const goneSet = new Set(gone);
+    return finishMove(g, mover, moves, label, to.filter(([x, y]) => !goneSet.has(key(x, y))), extra);
+  }
   return finishMove(g, mover, moves, label, to);
 }
 
@@ -596,7 +669,7 @@ export function applyAction(g, a, actor = {}) {
     }
 
     case 'delete': {
-      if (!g.hex) return fail('Deleting blobs is only possible in Hexagonal mode.');
+      if (g.opts.mode !== 'hex') return fail('Deleting blobs is only possible in Hexagonal mode.');
       const { x, y } = a;
       if (![x, y].every(isInt)) return fail('Bad delete.');
       if (!onBoard(g, x, y) || !g.board[y][x]) return fail('There\'s no stone there.');
@@ -722,7 +795,7 @@ export function applyAction(g, a, actor = {}) {
       setPosition(g, pos);
       g.opts.mode = pos.mode || (isHex(g) ? 'classic' : g.opts.mode);   // a square code can't be played on a hex board
       g.lastMove = null;
-      const m = { points: ', Points mode', hybrid: ', Hybrid mode', hex: ', Hexagonal mode' }[pos.mode] || '';
+      const m = { points: ', Points mode', hybrid: ', Hybrid mode', hex: ', Hexagonal mode', struct: ', Structures mode' }[pos.mode] || '';
       const dims = pos.hex ? `side ${pos.hex.side}, length ${pos.hex.length}` : `${pos.W} × ${pos.H}`;
       note(`loaded a position (${dims}${m})`, `Position loaded (${dims}${m})`);
       return done(`Position loaded (${dims}${m}).`);
@@ -745,16 +818,18 @@ export function applyAction(g, a, actor = {}) {
     case 'options': {
       const said = [];
       if (MODES.includes(a.mode) && a.mode !== g.opts.mode) {
-        const toHex = a.mode === 'hex', fromHex = isHex(g);
+        const toHex = hexBoardMode(a.mode) && !isHex(g), fromHex = isHex(g) && !hexBoardMode(a.mode);
         if (toHex || fromHex) pushHistory(g);            // the board changes shape; Undo brings it back
         g.opts.mode = a.mode;
         if (toHex) setHexBoard(g, HEX_DEF_S, HEX_DEF_L);
         else if (fromHex) { g.hex = null; g.W = 48; g.H = 24; g.board = emptyBoard(48, 24); }
-        if (toHex || fromHex) { g.lastMove = null; g.deletes = { B: DELETES, R: DELETES }; }
+        if (toHex || fromHex) g.lastMove = null;
+        g.deletes = { B: DELETES, R: DELETES };
         resetPoints(g);
         said.push({ classic: 'game mode Classic', points: 'game mode Points (collect points and bring them home)',
           hybrid: 'game mode Hybrid (classic scoring, but stones never die or collide)',
-          hex: 'game mode Hexagonal (Hybrid rules on a hex board, 3 deletes each)' }[a.mode]);
+          hex: 'game mode Hexagonal (Hybrid rules on a hex board, 3 deletes each)',
+          struct: 'game mode Structures (hex board with triangles and snowflakes)' }[a.mode]);
       }
       if (typeof a.enforce === 'boolean' && a.enforce !== g.opts.enforce) {
         g.opts.enforce = a.enforce; said.push(`turns ${a.enforce ? 'enforced' : 'not enforced'}`);

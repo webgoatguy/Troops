@@ -64,7 +64,7 @@ poll less often, change the numbers in the last line of `poll()` in `public/app.
 
 ## Game modes
 
-Pick the mode under **Options → Game mode** (Classic, Points, Hybrid or Hexagonal). In an online room the mode is shared,
+Pick the mode under **Options → Game mode** (Classic, Points, Hybrid, Hexagonal or Structures). In an online room the mode is shared,
 and switching it puts every point back.
 
 - **Classic**: stones fight. When stones collide, the attacker loses if its blob is
@@ -110,6 +110,24 @@ and switching it puts every point back.
     delete plus one ordinary move makes up a 2-move turn. Clear board gives the
     deletes back.
   - Switching to or from Hexagonal starts a fresh board (Undo brings the old one back).
+
+- **Structures**: the Hexagonal board and rules, without deletes, plus two special
+  shapes. Either orientation of each shape counts.
+  - **Triangle**: a blob of exactly 3 stones that all touch each other.
+    - After every move, every opponent stone touching a triangle is removed.
+    - All removals happen at once, so two triangles that touch each lose the touching
+      stones.
+    - A removal can create new triangles, which then act too, until nothing changes.
+  - **Snowflake**: a stone with three same-color neighbors on every other side. It
+    can sit inside a bigger blob.
+    - An opponent blob touching any of those 4 stones is frozen while it touches.
+    - A frozen blob can't move as a blob, but its stones can still move one at a time.
+
+## Moving stones
+
+Click a stone to see its single-stone moves, then click where it should go. Press and
+drag a stone to move its whole blob: the grabbed stone lands where you let go and the
+rest follows. While dragging, the blob turns faint if that spot isn't allowed.
 
 ## Game features
 

@@ -30,7 +30,8 @@ const placing = () => mode === 'R' || mode === 'B';
 let sel = null;          // { x, y, level: 1 (king) | 2 (blob) }
 let hover = null;
 let painting = null, paintBoard = null, paintChanges = null;
-let drag = null;         // blob drag: { gx, gy, moved, shift }
+let drag = null;         // blob drag in progress: { gx, gy, moved }
+let press = null;        // pointer pressed on a stone, not yet a click or a drag: { x, y, shift }
 let kbd = null;          // keyboard-nudged blob offset
 let message = '', showTurn = false;
 
@@ -146,7 +147,7 @@ async function resync() {
 async function poll() {
   const o = online; if (!o) return;
   clearTimeout(o.timer);
-  if (!document.hidden && o.pending === 0 && !painting && !drag) {
+  if (!document.hidden && o.pending === 0 && !painting && !drag && !press) {
     const r = await api('GET', { code: o.code, v: o.version, player: PLAYER });
     if (online !== o) return;
     if (r.status === 200) {
@@ -344,30 +345,13 @@ function doBlob(dx, dy) { dispatch({ type: 'blob', ax: sel.x, ay: sel.y, dx, dy 
 function playClick(x, y, shift) {
   const b = game.board;
   if (sel) {
-    if (sel.level === 1) {
-      if (x === sel.x && y === sel.y) {
-        sel.level = 2;
-        const bl = blobAt(x, y);
-        const stuck = G.isPoints(game) ? G.clusterOf(info, bl).cells.length - bl.size : 0;
-        message = `Blob selected (${bl.size} stone${bl.size > 1 ? 's' : ''}). Click where the ringed stone should go and the rest of the blob follows — or drag any of its stones.`
-          + (stuck ? ` The ${stuck} stone${stuck > 1 ? 's' : ''} stuck to it (dashed) will be dragged along.` : '');
-        showTurn = false; changed(); return;
-      }
-      const t = G.kingTargets(game, info, sel.x, sel.y).find(t => t.tx === x && t.ty === y);
-      const noDeath = G.isPoints(game) || G.isHybrid(game);
-      if (t && (noDeath ? t.o === 'empty' || t.o === 'score' : (t.o !== 'self' || shift))) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
-      if (t && noDeath && !(onBoard(x, y) && b[y][x])) {
-        message = t.o === 'forbidden' ? G.FORBIDDEN_KING : G.isHybrid(game) ? G.BLOCKED_KING_H : G.BLOCKED_KING;
-        showTurn = false; changed(); return;
-      }
-    } else {
-      if (x === sel.x && y === sel.y) { sel = null; message = ''; changed(); return; }
-      const bl = blobAt(sel.x, sel.y), dx = x - sel.x, dy = y - sel.y;
-      const ownOther = onBoard(x, y) && b[y][x] === bl.color && info.id[y][x] !== bl.index;
-      const plan = G.blobPlan(game, info, bl, dx, dy);
-      if (plan.valid) {
-        if (!ownOther || shift) { doBlob(dx, dy); return; }
-      } else if (!ownOther) { message = plan.reason; showTurn = false; changed(); return; }
+    if (x === sel.x && y === sel.y) { sel = null; message = ''; changed(); return; }   // click again = deselect
+    const t = G.kingTargets(game, info, sel.x, sel.y).find(t => t.tx === x && t.ty === y);
+    const noDeath = G.isPoints(game) || G.hybridLike(game);
+    if (t && (noDeath ? t.o === 'empty' || t.o === 'score' : (t.o !== 'self' || shift))) { dispatch({ type: 'king', fx: t.fx, fy: t.fy, tx: t.tx, ty: t.ty }); return; }
+    if (t && noDeath && !(onBoard(x, y) && b[y][x])) {
+      message = t.o === 'forbidden' ? G.FORBIDDEN_KING : game.hex ? G.BLOCKED_KING_X : G.hybridLike(game) ? G.BLOCKED_KING_H : G.BLOCKED_KING;
+      showTurn = false; changed(); return;
     }
   }
   if (onBoard(x, y) && b[y][x]) {
@@ -375,11 +359,25 @@ function playClick(x, y, shift) {
     if (p) { sel = null; message = p; showTurn = false; changed(); return; }
     sel = { x, y, level: 1 };
     const bl = blobAt(x, y);
-    message = `Stone selected. Click a marked square to move it` +
-      (bl.size > 1 ? `, or click it again to select its whole blob (${bl.size} stones).` : `, or click it again to move it as a 1-stone blob.`);
+    message = 'Stone selected. Click a marked ' + (game.hex ? 'hex' : 'square') + ' to move it'
+      + (bl.size > 1 ? `, or press and drag it to move its whole blob (${bl.size} stones).` : ', or drag it to move it as a 1-stone blob.');
     showTurn = false; changed(); return;
   }
   sel = null; message = ''; changed();
+}
+
+// Pressing on a stone: a plain click selects it (single-stone moves); dragging moves its whole blob.
+function startBlobDrag(p) {
+  const c = game.board[p.y][p.x];
+  const problem = c ? selectProblem(c) : 'There\'s no stone there any more.';
+  if (problem) { press = null; sel = null; message = problem; showTurn = false; changed(); return; }
+  sel = { x: p.x, y: p.y, level: 2 };
+  drag = { gx: p.x, gy: p.y, moved: true };
+  const bl = blobAt(p.x, p.y);
+  const stuck = G.isPoints(game) ? G.clusterOf(info, bl).cells.length - bl.size : 0;
+  message = `Dragging a ${bl.size}-stone blob — let go where the grabbed stone should end up.`
+    + (stuck ? ` The ${stuck} stone${stuck > 1 ? 's' : ''} stuck to it (dashed) come along.` : '');
+  showTurn = false; changed();
 }
 
 function paintCell(x, y) {
@@ -413,13 +411,10 @@ canvas.addEventListener('pointerdown', e => {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     render(); return;
   }
-  const bl = selBlob();
-  if (bl && onBoard(x, y) && info.id[y][x] === bl.index) {
-    // pressing on a stone of the selected blob: a click, or the start of a drag
-    drag = { gx: x, gy: y, moved: false, shift: e.shiftKey };
-    kbd = null;
+  if (onBoard(x, y) && game.board[y][x]) {
+    press = { x, y, shift: e.shiftKey };
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
-    render(); return;
+    return;
   }
   playClick(x, y, e.shiftKey);
 });
@@ -427,45 +422,29 @@ canvas.addEventListener('pointermove', e => {
   const c = cellAt(e);
   if (hover && hover.x === c.x && hover.y === c.y) return;
   hover = c;
-  kbd = null;
-  if (drag && (c.x !== drag.gx || c.y !== drag.gy)) drag.moved = true;
+  if (press && !drag && (c.x !== press.x || c.y !== press.y)) { startBlobDrag(press); return; }
   if (painting) paintCell(c.x, c.y);
   render();
 });
 window.addEventListener('pointerup', e => {
   if (painting) { finishPaint(); return; }
+  const p = press; press = null;
+  if (p && !drag) { playClick(p.x, p.y, p.shift); return; }        // it was a click
   if (!drag) return;
   const d = drag; drag = null;
-  if (!d.moved) { playClick(d.gx, d.gy, d.shift); return; }
   const c = cellAt(e), bl = selBlob();
   const dx = c.x - d.gx, dy = c.y - d.gy;
-  if (!bl || (!dx && !dy)) { render(); return; }
+  if (!bl || (!dx && !dy)) { sel = null; message = ''; changed(); return; }
   const plan = G.blobPlan(game, info, bl, dx, dy);
   if (plan.valid) doBlob(dx, dy);
-  else { message = plan.reason; showTurn = false; changed(); }
+  else { sel = null; message = plan.reason; showTurn = false; changed(); }
 });
-canvas.addEventListener('pointerleave', () => { if (!painting && !drag) { hover = null; render(); } });
+canvas.addEventListener('pointerleave', () => { if (!painting && !drag && !press) { hover = null; render(); } });
 
 document.addEventListener('keydown', e => {
   if (['SELECT', 'INPUT', 'TEXTAREA'].includes(e.target.tagName) || $('gameView').hidden) return;
   if (e.key === 'Escape') { sel = null; if (mode !== 'play') setMode(mode); else { message = ''; changed(); } return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (!spectating()) dispatch({ type: 'undo' }); return; }
-  const bl = selBlob();
-  if (!bl) return;
-  const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
-  if (step) {
-    e.preventDefault();
-    if (!kbd) kbd = { dx: 0, dy: 0 };
-    kbd.dx = Math.max(-game.W, Math.min(game.W, kbd.dx + step[0]));
-    kbd.dy = Math.max(-game.H, Math.min(game.H, kbd.dy + step[1]));
-    render(); return;
-  }
-  if (e.key === 'Enter' && kbd) {
-    e.preventDefault();
-    const plan = G.blobPlan(game, info, bl, kbd.dx, kbd.dy);
-    if (plan.valid) doBlob(kbd.dx, kbd.dy);
-    else { message = plan.reason; showTurn = false; changed(); }
-  }
 });
 
 function setMode(m) {
@@ -766,16 +745,9 @@ function render() {
     for (const [x, y] of lm.to) if (onBoard(x, y)) cellRect(x, y, 'rgba(232,168,0,.35)');
   }
 
-  // blob mode: shade every square the grabbed stone can reach (under the stones)
+  // blob being dragged (the reachable-square shading was removed on request)
   const bl = mode === 'play' ? selBlob() : null;
   const grip = bl ? (drag ? { x: drag.gx, y: drag.gy } : { x: sel.x, y: sel.y }) : null;
-  if (bl) {
-    ctx.fillStyle = `rgba(${RGB[bl.color]},.16)`;
-    for (const [dx, dy] of G.legalOffsets(game, info, bl)) {
-      const x = grip.x + dx, y = grip.y + dy;
-      if (inView(x, y)) cellRect(x, y, `rgba(${RGB[bl.color]},.16)`);
-    }
-  }
 
   // blob connectors, then stones
   ctx.save(); ctx.lineCap = 'butt'; ctx.lineWidth = cs * 0.34;
@@ -801,6 +773,31 @@ function render() {
         for (const d of G.HEX_DIRS) { const nx = x + d[0], ny = y + d[1]; if (!(onBoard(nx, ny) && b[ny][nx] === c)) hexEdge(x, y, d); }
       }
       ctx.stroke();
+    }
+    // Structures: mark triangles and snowflakes, and outline frozen blobs in ice blue
+    if (G.isStruct(game) && !paintBoard) {
+      const sx = G.structures(game, info);
+      ctx.save(); ctx.setLineDash([Math.max(3, cs * 0.18), Math.max(2, cs * 0.12)]); ctx.strokeStyle = '#8fd9ff'; ctx.lineWidth = Math.max(2, cs * 0.12);
+      for (const bi of sx.frozen) for (const [x, y] of info.blobs[bi].cells) { hexPath(x, y, cs * 0.72); ctx.stroke(); }
+      ctx.restore();
+      ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.strokeStyle = 'rgba(255,255,255,.92)';
+      for (const k of sx.tri) {
+        const [x, y] = k.split(',').map(Number), [px, py] = C(x, y), r = cs * 0.36;
+        ctx.beginPath(); ctx.moveTo(px, py - r); ctx.lineTo(px + r * 0.87, py + r * 0.5); ctx.lineTo(px - r * 0.87, py + r * 0.5); ctx.closePath(); ctx.fill();
+      }
+      ctx.lineWidth = Math.max(1.5, cs * 0.08); ctx.lineCap = 'round';
+      for (const k of sx.snow) {
+        const [x, y] = k.split(',').map(Number), [px, py] = C(x, y), r = cs * 0.42;
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI / 3 * i + Math.PI / 6, ex = px + r * Math.cos(a), ey = py + r * Math.sin(a);
+          ctx.moveTo(px, py); ctx.lineTo(ex, ey);
+          const bx = px + r * 0.62 * Math.cos(a), by = py + r * 0.62 * Math.sin(a), t = r * 0.24;
+          ctx.moveTo(bx, by); ctx.lineTo(bx + t * Math.cos(a + 0.9), by + t * Math.sin(a + 0.9));
+          ctx.moveTo(bx, by); ctx.lineTo(bx + t * Math.cos(a - 0.9), by + t * Math.sin(a - 0.9));
+        }
+        ctx.stroke();
+      }
     }
     // last move, drawn over the tiles: gold inset outline where stones landed
     if (lm && !paintBoard) {
@@ -894,6 +891,8 @@ function render() {
   } else if (plan.reason === G.BLOCKED_BLOB || plan.reason === G.BLOCKED_BLOB_H) {
     for (const m of moves) if (m.o === 'blocked' && inView(m.tx, m.ty)) cross(...C(m.tx, m.ty), cs * 0.2, COL.x, .7);
     setPreview('Blocked — something would run into a wall or another stone.', true);
+  } else if (plan.frozen) {
+    setPreview('Frozen — this blob touches a snowflake. Its stones can still move one at a time.', true);
   } else if (plan.reason === G.GIFT_BLOB) {
     for (const m of moves) if (m.gift) cross(...C(m.tx, m.ty), cs * 0.22, COL.x, .8);
     setPreview('Illegal — a stone would land on one of its opponent\'s points.', true);
@@ -917,7 +916,7 @@ function updateUI() {
   $('carryB').textContent = game.carry.filter(([x, y]) => b[y] && b[y][x] === 'B').length;
   document.body.dataset.mode = game.opts.mode;
   $('gmode').value = game.opts.mode;
-  $('modeTag').textContent = { hybrid: 'Hybrid mode', hex: 'Hexagonal mode' }[game.opts.mode] || 'Points mode';
+  $('modeTag').textContent = { hybrid: 'Hybrid mode', hex: 'Hexagonal mode', struct: 'Structures mode' }[game.opts.mode] || 'Points mode';
   $('delB').textContent = game.deletes.B; $('delR').textContent = game.deletes.R;
   if (game.hex) {
     if (document.activeElement !== $('hs')) $('hs').value = game.hex.side;

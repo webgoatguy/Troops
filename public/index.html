@@ -65,7 +65,8 @@ ul.log li.note{color:var(--muted);font-style:italic}
 body[data-mode="classic"] [data-modes]:not([data-modes~="classic"]),
 body[data-mode="points"] [data-modes]:not([data-modes~="points"]),
 body[data-mode="hybrid"] [data-modes]:not([data-modes~="hybrid"]),
-body[data-mode="hex"] [data-modes]:not([data-modes~="hex"]){display:none !important}
+body[data-mode="hex"] [data-modes]:not([data-modes~="hex"]),
+body[data-mode="struct"] [data-modes]:not([data-modes~="struct"]){display:none !important}
 button.del{border-color:#6b2a24;color:#6b2a24;font-weight:600}
 button.del.active{background:#6b2a24;color:#fff}
 .modetag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:#2a2622;color:#fff;border-radius:999px;padding:2px 9px;margin-left:4px;vertical-align:middle}
@@ -109,7 +110,7 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:#eee8dc;border-radius:4px;
 <div class="wrap">
   <header>
     <div class="brand">
-      <h1><span class="r">Red</span> vs <span class="b">Blue</span> <span class="modetag" data-modes="points hybrid hex" id="modeTag">Points mode</span></h1>
+      <h1><span class="r">Red</span> vs <span class="b">Blue</span> <span class="modetag" data-modes="points hybrid hex struct" id="modeTag">Points mode</span></h1>
       <button id="menuBtn" class="small" hidden>← Menu</button>
     </div>
     <div class="scorebar" id="scorebar" hidden>
@@ -174,7 +175,7 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:#eee8dc;border-radius:4px;
       <button id="resetScores">Reset scores</button>
       <button id="clear">Clear board</button>
       <span class="sep"></span>
-      <label class="size" data-modes="hex">Hex board: side <input type="number" id="hs" min="2" max="30" value="7"> length <input type="number" id="hl" min="1" max="60" value="10"></label>
+      <label class="size" data-modes="hex struct">Hex board: side <input type="number" id="hs" min="2" max="30" value="7"> length <input type="number" id="hl" min="1" max="60" value="10"></label>
       <label class="size" data-modes="classic points hybrid">Board <input type="number" id="bw" min="3" max="120" value="48"> × <input type="number" id="bh" min="3" max="80" value="24"></label>
       <button id="applySize">Resize</button>
       <span class="sep"></span>
@@ -199,13 +200,12 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:#eee8dc;border-radius:4px;
         <h2>How to move</h2>
         <p data-modes="points" style="margin:0 0 8px"><b>Points mode:</b> stones never die and can't move into walls or other stones. Blue's points are in the top row and Red's in the bottom row. Land a stone on one of your points to pick it up (the stone turns lighter with a gold dot), then bring it home to score: Blue's home is the bottom 5 rows, Red's the top 5. Moving a blob drags everything stuck to it, of either color. Any move that puts a blue stone on a red point, or a red stone on a blue point, is illegal.</p>
         <p data-modes="hex" style="margin:0 0 8px"><b>Hexagonal mode:</b> Hybrid rules on a hexagon board that runs sideways. Blue scores by moving stones off the two right-hand edges, Red off the two left-hand edges (stones that cross score; the rest of a blob stays). Stones never die and can't move into other stones, the top/bottom walls, or their own back edges. A stone moves to any of the 6 hexes touching it, and blobs are hexes that share an edge. <b>Deletes:</b> each player may, 3 times per game, use a move to delete one whole opponent blob — press <i>Delete a blob</i>, then click it.</p>
+        <p data-modes="struct" style="margin:0 0 8px"><b>Structures mode:</b> Hexagonal rules (Blue scores off the right-hand edges, Red off the left; no deaths, no collisions) without deletes, plus two special shapes, in either orientation. <b>Triangle:</b> a blob of exactly 3 stones that all touch each other (white ▲). After every move, every opponent stone touching a triangle is removed — touching triangles remove each other's stones, and removals can set off more. <b>Snowflake:</b> a stone with three same-colour neighbours on every other side (white ❄), even inside a bigger blob. An opponent blob touching any of those 4 stones is frozen (ice-blue outline): it can't move as a blob, but its stones can still move one at a time.</p>
         <p data-modes="hybrid" style="margin:0 0 8px"><b>Hybrid mode:</b> score like Classic — Blue by moving stones off the top wall, Red off the bottom wall (when a blob crosses part-way, the stones that cross score and the rest stay). But stones never die: nothing can move into another stone (yours or theirs), a side wall, or its own back wall, and moving a blob never drags other stones.</p>
         <ul>
-          <li>Click a stone: its king moves appear.</li>
-          <li>Click the same stone again: its whole blob is selected, and that stone gets a ring. A blob can slide to any spot where its new position overlaps or edge-touches its old one.</li>
-          <li>In blob mode, the shaded squares show everywhere the ringed stone can go. Hover to preview the whole blob, then click to move it. You can also drag any stone of the blob to where you want that stone to end up.</li>
-          <li>Or nudge the preview with <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> and press <kbd>Enter</kbd>.</li>
-          <li>Click the ringed stone again (or <kbd>Esc</kbd>) to deselect.</li>
+          <li>Click a stone: its single-stone moves appear. Click a marked square to move it there; click the stone again to deselect.</li>
+          <li>Press and drag a stone to move its whole blob: the grabbed stone goes where you let go and the rest follows. A blob can slide to any spot where its new position overlaps or edge-touches its old one. While dragging, the blob turns faint if that spot isn't allowed.</li>
+          <li><kbd>Esc</kbd> deselects.</li>
           <li data-modes="classic"><kbd>Shift</kbd>+click one of your own adjacent stones to deliberately move into it (you lose the moving stone).</li>
           <li><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Z</kbd> undoes.</li>
           <li>Placing: press an "Add … stone" button, then click or drag across squares. Clicking a stone of that color removes it. Press the button again or <kbd>Esc</kbd> when done.</li>
@@ -218,16 +218,19 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:#eee8dc;border-radius:4px;
           <svg width="22" height="22"><circle cx="11" cy="11" r="4" fill="#8a8272"/></svg><span>Empty square — stone lands there</span>
           <svg data-modes="classic" width="22" height="22"><circle cx="11" cy="11" r="8" fill="none" stroke="#1f9d55" stroke-width="3"/></svg><span data-modes="classic">Attack wins — enemy stone dies, yours takes its place</span>
           <svg data-modes="classic" width="22" height="22"><path d="M6 6L16 16M16 6L6 16" stroke="#2a2622" stroke-width="3" stroke-linecap="round"/></svg><span data-modes="classic">Your stone is lost (loses the attack, side wall, own stone, or wrong wall)</span>
-          <svg data-modes="points hybrid hex" width="22" height="22"><path d="M7 7L15 15M15 7L7 15" stroke="#2a2622" stroke-width="2.5" stroke-linecap="round" opacity=".35"/></svg><span data-modes="points hybrid hex">Blocked — can't move into a wall or another stone</span>
+          <svg data-modes="points hybrid hex struct" width="22" height="22"><path d="M7 7L15 15M15 7L7 15" stroke="#2a2622" stroke-width="2.5" stroke-linecap="round" opacity=".35"/></svg><span data-modes="points hybrid hex struct">Blocked — can't move into a wall or another stone</span>
           <svg data-modes="points" width="22" height="22"><rect x="1" y="1" width="20" height="20" fill="#2b67d6" opacity=".12"/><path d="M11 5L17 11L11 17L5 11Z" fill="#2b67d6"/></svg><span data-modes="points">A point still waiting to be picked up (blue: top row, red: bottom row)</span>
           <svg data-modes="points" width="22" height="22"><path d="M11 4L18 11L11 18L4 11Z" fill="none" stroke="#1a4595" stroke-width="2.5"/></svg><span data-modes="points">This move picks up a point</span>
           <svg data-modes="points" width="22" height="22"><circle cx="11" cy="11" r="8" fill="#6a97ec" stroke="#1a4595" stroke-width="1.5"/><circle cx="11" cy="11" r="3.2" fill="#f2c230" stroke="#8a6a00" stroke-width="1"/></svg><span data-modes="points">A stone carrying a point</span>
           <svg data-modes="points" width="22" height="22"><rect x="1" y="1" width="20" height="20" fill="#2b67d6" opacity=".14"/><rect x="1" y="1" width="20" height="20" fill="none" stroke="#2b67d6" stroke-width="1" stroke-dasharray="3 2"/></svg><span data-modes="points">Home base (blue: bottom 5 rows, red: top 5 rows)</span>
-          <svg width="22" height="22"><text x="11" y="15" text-anchor="middle" font-size="12" font-weight="700" fill="#1a4595">+1</text></svg><span><span data-modes="classic hybrid hex">Scores a point</span><span data-modes="points">Delivers a carried point — scores</span></span>
+          <svg data-modes="struct" width="22" height="22"><path d="M11 1L20 6V16L11 21L2 16V6Z" fill="#2b67d6"/><path d="M11 6L16 14H6Z" fill="#fff"/></svg><span data-modes="struct">Triangle — removes opponent stones that touch it</span>
+          <svg data-modes="struct" width="22" height="22"><path d="M11 1L20 6V16L11 21L2 16V6Z" fill="#d64037"/><g stroke="#fff" stroke-width="1.6" stroke-linecap="round"><path d="M11 4V18M5 7.5L17 14.5M5 14.5L17 7.5"/></g></svg><span data-modes="struct">Snowflake stone — freezes opponent blobs that touch it</span>
+          <svg data-modes="struct" width="22" height="22"><path d="M11 1L20 6V16L11 21L2 16V6Z" fill="#2b67d6"/><path d="M11 5L16 8V14L11 17L6 14V8Z" fill="none" stroke="#8fd9ff" stroke-width="2" stroke-dasharray="3 2"/></svg><span data-modes="struct">Frozen blob — can't move as a blob</span>
+          <svg width="22" height="22"><text x="11" y="15" text-anchor="middle" font-size="12" font-weight="700" fill="#1a4595">+1</text></svg><span><span data-modes="classic hybrid hex struct">Scores a point</span><span data-modes="points">Delivers a carried point — scores</span></span>
           <svg width="22" height="22"><rect x="2" y="2" width="18" height="18" fill="#e8a800" fill-opacity=".35"/></svg><span>The last move</span>
         </div>
         <p class="hint" data-modes="classic" style="margin:10px 0 0">Blue scores off the top edge, Red off the bottom edge. Stones pushed off the left/right edges (or off the opponent's scoring edge) just disappear.</p>
-        <p class="hint" data-modes="hex" style="margin:10px 0 0">The ring of hexes around the board shows the edges: blue arrows on the right = Blue scores there, red arrows on the left = Red scores there, grey = wall.</p>
+        <p class="hint" data-modes="hex struct" style="margin:10px 0 0">The ring of hexes around the board shows the edges: blue arrows on the right = Blue scores there, red arrows on the left = Red scores there, grey = wall.</p>
         <p class="hint" data-modes="hybrid" style="margin:10px 0 0">Blue scores off the top edge, Red off the bottom edge. The left/right walls and your own back wall block, and no stone ever dies.</p>
         <p class="hint" data-modes="points" style="margin:10px 0 0">In blob mode, stones that will be dragged along get a dashed outline. A stone carries at most one point at a time. A dark × marks a point square a stone isn't allowed onto.</p>
       </section>
@@ -241,6 +244,7 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:#eee8dc;border-radius:4px;
             <option value="points">Points — carry points home</option>
             <option value="hybrid">Hybrid — classic scoring, no deaths</option>
             <option value="hex">Hexagonal — hybrid on a hex board</option>
+            <option value="struct">Structures — triangles &amp; snowflakes</option>
           </select>
           <span class="hint">Switching modes puts every point back. Stones stay where they are, except switching to or from Hexagonal starts a fresh board (Undo brings the old one back).</span>
         </div>
